@@ -1,11 +1,171 @@
 # Codex Sync / Codex Tools
 
-这个仓库包含两个相互关联、但定位不同的 Codex 桌面工具：
+这个仓库里放了两个和 Codex 相关的小工具。
 
-- `Codex Sync`：SwiftUI macOS App，专注 WebDAV 线程同步与本地线程 Provider 归并。
-- `Codex Tools`：Tauri + React + Rust 跨平台 App，专注 Provider 管理、Provider 快速切换和线程归并，目标支持 macOS 与 Windows。
+我最开始做它们，是因为自己在不同 Provider 之间切来切去之后，Codex 里的旧会话经常“看不见”了。后来又加了 WebDAV 同步、状态栏切换 Provider 这些东西，慢慢就拆成了两个项目：
 
-两个项目都只围绕 Codex 工作流设计，不试图成为泛用 AI CLI 管理器。
+- `Codex Sync`：macOS 原生 App，主要做 Codex 线程同步和本地线程归并。
+- `Codex Tools`：Tauri 跨平台 App，主要做 Provider 管理、Provider 快速切换和线程归并。
+
+它们都只服务 Codex，不打算做成一个“大而全”的 AI CLI 管理器。
+
+## 下载
+
+最新版本在 Releases 里：
+
+[https://github.com/versionsai/codex-tools/releases](https://github.com/versionsai/codex-tools/releases)
+
+目前会打包这些文件：
+
+- `Codex.Sync-macos.zip`
+- `Codex.Tools-macos.zip`
+- `Codex.Tools_*.exe`
+- `Codex.Tools_*.msi`
+
+macOS 如果提示“无法验证开发者”，需要在系统设置里手动允许打开。现在还没有做签名和 notarization，这个后面再补。
+
+## 两个项目怎么选
+
+如果你只想同步 Codex 线程，或者把本机不同 Provider 下的旧线程合并回来，用 `Codex Sync`。
+
+如果你经常在官方 ChatGPT 登录和第三方 API Key Provider 之间切换，用 `Codex Tools`。它会保存不同 Provider 的配置，并在切换时写入 Codex 的 `config.toml` 和 `auth.json`。
+
+## Codex Sync
+
+`Codex Sync` 是 SwiftUI 写的 macOS App。
+
+它现在主要做三件事：
+
+- 通过 WebDAV 把本地 Codex 线程推到远端。
+- 通过 WebDAV 从远端拉回 Codex 线程。
+- 把本地线程里的 `model_provider` 合并成当前 Provider，避免旧会话因为 Provider 名变了而消失。
+
+同步范围比较克制，只同步和线程相关的文件：
+
+```text
+~/.codex/sessions/**/rollout-*.jsonl
+~/.codex/archived_sessions/**/rollout-*.jsonl
+~/.codex/session_index.jsonl
+```
+
+不会同步这些本地状态和日志：
+
+```text
+~/.codex/state_5.sqlite
+~/.codex/logs_2.sqlite
+*.wal
+*.shm
+```
+
+本地构建：
+
+```bash
+swift build -c release
+./build_swiftui_app.sh
+```
+
+构建后的 App 在：
+
+```text
+dist-swiftui/Codex Sync.app
+```
+
+## Codex Tools
+
+`Codex Tools` 是 Tauri + React + Rust 写的，目标是 macOS 和 Windows 都能用。
+
+现在已经有这些功能：
+
+- 管理多个 Codex Provider。
+- 固定保留官方 `openai` Provider，用来对应 Codex 官方 ChatGPT 登录模式。
+- 为第三方 API Key Provider 保存独立配置。
+- 切换 Provider 时写入 `config.toml` 和 `auth.json`。
+- 切换后自动合并本地线程 Provider。
+- macOS 下常驻状态栏，可以从状态栏菜单直接切 Provider。
+
+本地开发：
+
+```bash
+cd codex-tools
+npm install
+npm run tauri dev
+```
+
+打包：
+
+```bash
+npm run build
+npm run tauri build
+```
+
+常见产物位置：
+
+```text
+codex-tools/src-tauri/target/release/bundle/macos/Codex Tools.app
+codex-tools/src-tauri/target/release/bundle/dmg/*.dmg
+codex-tools/src-tauri/target/release/bundle/nsis/*.exe
+codex-tools/src-tauri/target/release/bundle/msi/*.msi
+```
+
+## Codex 目录
+
+工具默认读取当前用户的 Codex 目录：
+
+```text
+~/.codex
+```
+
+Windows 下通常是：
+
+```text
+C:\Users\<用户名>\.codex
+```
+
+如果你用的是自定义目录，可以设置 `CODEX_HOME`：
+
+```bash
+export CODEX_HOME="/path/to/.codex"
+```
+
+```powershell
+$env:CODEX_HOME="D:\Codex\.codex"
+```
+
+代码里不应该写死任何人的本机路径。如果你发现哪里写死了，欢迎直接提 issue。
+
+## 和 cc-switch、codex- 的关系
+
+这个项目不是凭空冒出来的。
+
+`Codex Tools` 的 Provider 管理、状态栏常驻、快速切换入口，参考了 `cc-switch` 的思路。`Codex Sync` 的线程同步、WebDAV 推拉、本地多 Provider 线程归并，参考了 `codex-` 方向上的探索。
+
+这里不会假装这些想法都是自己发明的。这个仓库只是把这些需求重新收束到 Codex 这一个场景里，做成一个更顺手的小工具。
+
+如果你需要 Claude Code / 多 CLI 的切换管理，可以去看 `cc-switch`。如果你关心 Codex 线程同步的早期方案，也建议看看 `codex-`。
+
+## CI/CD
+
+仓库里有两条 GitHub Actions：
+
+- `CI`：每次 push / PR 跑 Swift、前端和 Rust 检查。
+- `Release`：推送 `v*` tag 时自动构建 macOS / Windows 产物并发布 Release。
+
+发布一个新版本大概是这样：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+## 风险提示
+
+这两个工具都会读写你的 Codex 配置或线程文件。虽然逻辑上会尽量克制，但第一次用之前，最好还是备份一下：
+
+```text
+~/.codex
+```
+
+尤其是你已经有很多长期会话、多个 Provider，或者正在多设备之间同步时，更建议先备份。
 
 ## 项目结构
 
@@ -20,156 +180,10 @@
     └── src-tauri
 ```
 
-根目录是 `Codex Sync` 的 Swift Package。`codex-tools/` 是独立的 Tauri 项目。
+根目录是 `Codex Sync`，`codex-tools/` 是独立的 Tauri 项目。
 
-## Codex Sync
-
-`Codex Sync` 是 macOS 原生 SwiftUI 工具，核心功能是：
-
-- 通过 WebDAV 推送本地 Codex 线程到远端。
-- 通过 WebDAV 拉取远端 Codex 线程到本地。
-- 将本地所有 Codex 线程归并到当前 `model_provider`。
-
-默认同步范围：
-
-- `~/.codex/sessions/**/rollout-*.jsonl`
-- `~/.codex/archived_sessions/**/rollout-*.jsonl`
-- `~/.codex/session_index.jsonl`
-
-不会同步：
-
-- `~/.codex/state_5.sqlite`
-- `~/.codex/logs_2.sqlite`
-- `*.wal`
-- `*.shm`
-
-开发构建：
-
-```bash
-swift build -c release
-```
-
-打包 macOS App：
-
-```bash
-./build_swiftui_app.sh
-```
-
-产物位置：
-
-```text
-dist-swiftui/Codex Sync.app
-```
-
-## Codex Tools
-
-`Codex Tools` 是跨平台桌面工具，目标是把 Provider 管理和线程归并做成更高频、更轻量的入口。
-
-核心功能：
-
-- Provider 列表、创建、编辑、删除。
-- 官方 `openai` Provider 固定保留，用于 Codex 官方 ChatGPT 登录模式。
-- 三方 API Key Provider 写入 `config.toml` 和 `auth.json`。
-- 切换 Provider 时自动归并线程 Provider。
-- macOS 状态栏常驻，状态栏菜单可直接切换 Provider。
-- WebDAV 配置入口，为后续跨平台同步能力预留。
-
-开发构建：
-
-```bash
-cd codex-tools
-npm install
-npm run build
-npm run tauri build
-```
-
-macOS 常见产物：
-
-```text
-codex-tools/src-tauri/target/release/bundle/macos/Codex Tools.app
-codex-tools/src-tauri/target/release/bundle/dmg/*.dmg
-```
-
-Windows 常见产物：
-
-```text
-codex-tools/src-tauri/target/release/codex-tools.exe
-codex-tools/src-tauri/target/release/bundle/nsis/*.exe
-codex-tools/src-tauri/target/release/bundle/msi/*.msi
-```
-
-## Codex 配置路径
-
-项目不写死任何用户机器上的绝对路径。
-
-默认 Codex 目录：
-
-```text
-~/.codex
-```
-
-Windows 下通常对应：
-
-```text
-C:\Users\<用户名>\.codex
-```
-
-`Codex Tools` 支持通过 `CODEX_HOME` 覆盖：
-
-```bash
-export CODEX_HOME="/path/to/.codex"
-```
-
-```powershell
-$env:CODEX_HOME="D:\Codex\.codex"
-```
-
-## 与 cc-switch、codex- 的关系
-
-这个仓库不是从零凭空设计的，也不应该抹掉已有项目的功能和价值。
-
-设计与实现过程中参考了：
-
-- `cc-switch`：主要参考 Provider 管理、Provider 切换、状态栏常驻、快速切换入口等成熟交互。
-- `codex-`：主要参考 Codex 线程同步、WebDAV 推送/拉取、本地多 Provider 线程归并等方向。
-
-本仓库的目标是在这些思路基础上做一个更聚焦 Codex 的工具集合。它不会刻意替代原项目，也不会抹除原项目的功能边界：
-
-- 如果你需要更完整的 Claude Code / 多 CLI 切换能力，请优先查看 `cc-switch`。
-- 如果你关注 Codex 线程同步的原始探索方向，也建议查看 `codex-`。
-
-正式开源发布前，建议在 Release 说明、项目文档和许可证信息中继续保留对这些项目的致谢。
-
-## CI/CD
-
-仓库提供两个 GitHub Actions 工作流：
-
-- `CI`：在 push 和 pull request 时验证 Swift、前端和 Rust/Tauri 构建检查。
-- `Release`：在推送 `v*` tag 时构建并上传 macOS 与 Windows 产物。
-
-推荐发布流程：
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-随后 GitHub Actions 会生成 Release 草稿，并上传构建产物。
-
-## 风险提示
-
-这些工具会读写当前用户的 Codex 配置和线程文件。正式使用前建议先备份：
-
-```text
-~/.codex
-```
-
-尤其是已有长期会话、多 Provider、多设备同步或重要历史线程的用户。
-
-## Legacy Python 版本
-
-仓库中仍保留了早期 Python/Tkinter + PyInstaller 版本的脚本，用于记录早期探索过程。标准构建入口以 SwiftUI 版 `Codex Sync` 和 Tauri 版 `Codex Tools` 为准。
+仓库里还保留了一些早期 Python/Tkinter + PyInstaller 的探索脚本。现在标准入口以 SwiftUI 版 `Codex Sync` 和 Tauri 版 `Codex Tools` 为准。
 
 ## License
 
-本项目采用 MIT License，详见 [LICENSE](LICENSE)。
+MIT License，见 [LICENSE](LICENSE)。
