@@ -24,6 +24,14 @@
 
 macOS 如果提示“无法验证开发者”，需要在系统设置里手动允许打开。现在还没有做签名和 notarization，这个后面再补。
 
+## 平台状态
+
+目前实际验证过的是 macOS。
+
+`Codex Sync` 和 `Codex Tools` 都已经在 macOS 上跑通过，也做过本机使用验证。
+
+Windows 现在只是能通过 GitHub Actions 编译出 `.exe` / `.msi` 安装包，还没有在真实 Windows 机器上完整验证 Provider 切换、Codex 配置写入、线程归并这些功能。所以 Windows 制品先当作实验性版本看待，不建议直接拿来放重要环境里用。
+
 ## 两个项目怎么选
 
 如果你只想同步 Codex 线程，或者把本机不同 Provider 下的旧线程合并回来，用 `Codex Sync`。
@@ -72,7 +80,7 @@ dist-swiftui/Codex Sync.app
 
 ## Codex Tools
 
-`Codex Tools` 是 Tauri + React + Rust 写的，目标是 macOS 和 Windows 都能用。
+`Codex Tools` 是 Tauri + React + Rust 写的。macOS 已经实际验证过；Windows 目前能编译出安装包，但还没有做完整功能验证。
 
 现在已经有这些功能：
 
@@ -148,7 +156,7 @@ $env:CODEX_HOME="D:\Codex\.codex"
 仓库里有两条 GitHub Actions：
 
 - `CI`：每次 push / PR 跑 Swift、前端和 Rust 检查。
-- `Release`：推送 `v*` tag 时自动构建 macOS / Windows 产物并发布 Release。
+- `Release`：推送 `v*` tag 时自动构建 macOS / Windows 产物并发布 Release。这里的 Windows 目前只代表“能编译出包”，不代表已经完成真实环境验证。
 
 发布一个新版本大概是这样：
 
