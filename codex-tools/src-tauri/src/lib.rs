@@ -174,6 +174,12 @@ pub fn run() {
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            #[cfg(target_os = "windows")]
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_skip_taskbar(false);
+                let _ = window.set_focus();
+            }
             let _ = setup_tray(app)?;
             APP_HANDLE.set(app.handle().clone()).ok();
             Ok(())
