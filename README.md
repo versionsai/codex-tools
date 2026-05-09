@@ -172,4 +172,4 @@ git push origin v0.1.0
 
 ## License
 
-许可证尚未确定。正式开源前请补充 `LICENSE` 文件，并确认与参考项目及依赖许可证兼容。
+本项目采用 MIT License，详见 [LICENSE](LICENSE)。

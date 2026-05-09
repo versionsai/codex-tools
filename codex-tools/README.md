@@ -167,7 +167,7 @@ src-tauri/target/release/bundle/msi/*.msi
 - WebDAV 拉取远端线程。
 - 冲突检测与合并预览。
 - Windows 安装包 CI 验证。
-- 发布前的许可证与第三方项目致谢整理。
+- 第三方项目致谢与依赖许可证整理。
 
 ## 风险提示
 
@@ -182,4 +182,4 @@ Codex Tools 会读写当前用户的 Codex 配置文件：
 
 ## 许可证
 
-许可证尚未确定。正式开源前请补充 `LICENSE` 文件，并确认与参考项目及依赖的许可证兼容。
+本项目采用 MIT License，详见仓库根目录的 `LICENSE` 文件。

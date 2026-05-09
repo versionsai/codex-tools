@@ -3,6 +3,7 @@ name = "codex-tools"
 version = "0.1.0"
 description = "Cross-platform Codex provider and thread sync assistant"
 authors = ["Codex Tools"]
+license = "MIT"
 edition = "2021"
 
 [lib]
