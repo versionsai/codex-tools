@@ -5,7 +5,10 @@ use services::{
         delete_provider_impl, fetch_provider_models_impl, get_provider_impl, get_summary_impl,
         list_providers_impl, save_provider_impl, switch_provider_impl, unify_thread_provider_impl,
     },
-    webdav::{load_webdav_config_impl, save_webdav_config_impl, WebDavConfig},
+    webdav::{
+        load_webdav_config_impl, pull_threads_impl, push_threads_impl, save_webdav_config_impl,
+        WebDavConfig,
+    },
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
@@ -79,13 +82,13 @@ fn save_webdav_config(config: WebDavConfig) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn pull_threads() -> Result<String, String> {
-    Ok("拉取线程接口已预留，下一步迁移 WebDAV 下载逻辑".to_string())
+async fn pull_threads() -> Result<String, String> {
+    pull_threads_impl().await.map_err(|err| err.to_string())
 }
 
 #[tauri::command]
-fn push_threads() -> Result<String, String> {
-    Ok("推送线程接口已预留，下一步迁移 WebDAV 上传逻辑".to_string())
+async fn push_threads() -> Result<String, String> {
+    push_threads_impl().await.map_err(|err| err.to_string())
 }
 
 fn refresh_tray_menu_for_app() -> tauri::Result<()> {
