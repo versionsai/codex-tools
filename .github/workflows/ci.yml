@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+jobs:
+  codex-sync:
+    name: Codex Sync Swift build
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Codex Sync
+        run: swift build -c release
+
+  codex-tools-frontend:
+    name: Codex Tools frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: codex-tools
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: codex-tools/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+  codex-tools-rust:
+    name: Codex Tools Rust check
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-15
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: codex-tools/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: codex-tools/src-tauri
+
+      - name: Install frontend dependencies
+        working-directory: codex-tools
+        run: npm ci
+
+      - name: Build frontend assets
+        working-directory: codex-tools
+        run: npm run build
+
+      - name: Rust check
+        working-directory: codex-tools/src-tauri
+        run: cargo check

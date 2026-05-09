@@ -1,0 +1,24 @@
+.DS_Store
+.build/
+build/
+dist/
+dist-swiftui/
+__pycache__/
+*.pyc
+*.log
+*.tmp
+
+# Python legacy packaging
+*.spec
+
+# Node / Tauri project outputs
+codex-tools/node_modules/
+codex-tools/dist/
+codex-tools/src-tauri/target/
+codex-tools/src-tauri/gen/
+!codex-tools/package-lock.json
+!codex-tools/src-tauri/Cargo.lock
+
+# Local editor files
+.idea/
+.vscode/
