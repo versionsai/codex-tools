@@ -1,12 +1,12 @@
 use anyhow::{anyhow, Result};
-use std::path::PathBuf;
+use std::{env, path::PathBuf};
 
 pub fn codex_dir() -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os("CODEX_HOME").filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(path));
+    if let Some(path) = env::var_os("CODEX_HOME").filter(|value| !value.is_empty()) {
+        return Ok(expand_home(PathBuf::from(path)));
     }
-    let home = dirs::home_dir().ok_or_else(|| anyhow!("无法定位用户主目录"))?;
-    Ok(home.join(".codex"))
+
+    Ok(get_home_dir().join(".codex"))
 }
 
 pub fn config_toml_path() -> Result<PathBuf> {
@@ -30,4 +30,37 @@ pub fn providers_config_path() -> Result<PathBuf> {
 
 pub fn webdav_config_path() -> Result<PathBuf> {
     Ok(codex_dir()?.join("webdav_sync_config.json"))
+}
+
+fn get_home_dir() -> PathBuf {
+    if let Some(home) = dirs::home_dir() {
+        return home;
+    }
+
+    if let Some(user_profile) = env::var_os("USERPROFILE").filter(|value| !value.is_empty()) {
+        return PathBuf::from(user_profile);
+    }
+
+    if let (Some(drive), Some(path)) = (env::var_os("HOMEDRIVE"), env::var_os("HOMEPATH")) {
+        let mut combined = PathBuf::from(drive);
+        combined.push(PathBuf::from(path));
+        return combined;
+    }
+
+    PathBuf::from(".")
+}
+
+fn expand_home(path: PathBuf) -> PathBuf {
+    let Some(raw) = path.to_str() else {
+        return path;
+    };
+    if raw == "~" {
+        return dirs::home_dir().unwrap_or(path);
+    }
+    if let Some(rest) = raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\")) {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    path
 }

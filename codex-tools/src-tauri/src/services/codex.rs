@@ -45,7 +45,7 @@ struct ProviderStore {
 pub fn get_summary_impl() -> Result<Summary> {
     let dir = codex_dir()?;
     Ok(Summary {
-        provider: current_provider()?,
+        provider: current_provider().unwrap_or_else(|_| "openai".to_string()),
         active_sessions: rollout_count(&dir.join("sessions")),
         archived_sessions: rollout_count(&dir.join("archived_sessions")),
         codex_dir: dir.display().to_string(),
@@ -55,9 +55,11 @@ pub fn get_summary_impl() -> Result<Summary> {
 pub fn list_providers_impl() -> Result<Vec<ProviderConfig>> {
     let current = current_provider().unwrap_or_else(|_| "openai".to_string());
     let mut store = read_provider_store()?;
-    if !store.providers.iter().any(|provider| provider.id == current) {
-        store.providers.insert(0, default_openai_provider(current));
+    ensure_builtin_openai(&mut store.providers);
+    if current != "openai" && !store.providers.iter().any(|provider| provider.id == current) {
+        store.providers.insert(1, default_api_key_provider(current));
     }
+    capture_current_live_config(&mut store.providers)?;
     for provider in &mut store.providers {
         if provider.auth_json.is_none() || provider.config_toml.is_none() {
             *provider = with_live_files(provider.clone())?;
@@ -281,25 +283,17 @@ fn default_openai_provider(id: String) -> ProviderConfig {
 
 fn read_provider_store() -> Result<ProviderStore> {
     let path = providers_config_path()?;
-    if !path.exists() {
-        return Ok(ProviderStore {
+    let mut store = if !path.exists() {
+        ProviderStore {
             providers: vec![default_openai_provider("openai".to_string())],
-        });
-    }
-    let content = fs::read_to_string(path)?;
-    let mut store: ProviderStore = serde_json::from_str(&content)?;
-    if let Some(index) = store.providers.iter().position(|provider| provider.id == "openai") {
-        let saved = store.providers.remove(index);
-        let mut builtin = default_openai_provider("openai".to_string());
-        builtin.model = saved.model.or(builtin.model);
-        builtin.model_reasoning_effort =
-            saved.model_reasoning_effort.or(builtin.model_reasoning_effort);
-        builtin.auth_json = saved.auth_json;
-        builtin.config_toml = saved.config_toml;
-        store.providers.insert(0, builtin);
+        }
     } else {
-        store.providers.insert(0, default_openai_provider("openai".to_string()));
-    }
+        let content = fs::read_to_string(path)?;
+        serde_json::from_str(&content).unwrap_or_else(|_| ProviderStore {
+            providers: vec![default_openai_provider("openai".to_string())],
+        })
+    };
+    ensure_builtin_openai(&mut store.providers);
     sort_providers(&mut store.providers);
     Ok(store)
 }
@@ -333,6 +327,39 @@ fn sanitize_provider(provider: ProviderConfig) -> ProviderConfig {
         auth_json: provider.auth_json,
         config_toml: provider.config_toml,
     }
+}
+
+fn default_api_key_provider(id: String) -> ProviderConfig {
+    ProviderConfig {
+        id,
+        name: None,
+        auth_type: Some("api_key".to_string()),
+        base_url: None,
+        api_key: None,
+        wire_api: Some("responses".to_string()),
+        model: Some("gpt-5.4".to_string()),
+        model_reasoning_effort: Some("high".to_string()),
+        requires_openai_auth: Some(true),
+        auth_json: None,
+        config_toml: None,
+    }
+}
+
+fn ensure_builtin_openai(providers: &mut Vec<ProviderConfig>) {
+    let Some(index) = providers.iter().position(|provider| provider.id == "openai") else {
+        providers.insert(0, default_openai_provider("openai".to_string()));
+        return;
+    };
+
+    let saved = providers.remove(index);
+    let mut builtin = default_openai_provider("openai".to_string());
+    builtin.model = saved.model.or(builtin.model);
+    builtin.model_reasoning_effort = saved
+        .model_reasoning_effort
+        .or(builtin.model_reasoning_effort);
+    builtin.auth_json = saved.auth_json;
+    builtin.config_toml = saved.config_toml;
+    providers.insert(0, builtin);
 }
 
 fn with_live_files(mut provider: ProviderConfig) -> Result<ProviderConfig> {

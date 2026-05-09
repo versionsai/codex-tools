@@ -78,6 +78,18 @@ const emptyProvider: ProviderConfig = {
   requires_openai_auth: true,
 };
 
+const builtinOpenAIProvider: ProviderConfig = {
+  id: "openai",
+  name: "Codex 默认 Provider",
+  auth_type: "chatgpt",
+  base_url: "https://api.openai.com/v1",
+  api_key: "",
+  wire_api: "responses",
+  model: "gpt-5.4",
+  model_reasoning_effort: "medium",
+  requires_openai_auth: false,
+};
+
 function App() {
   const [summary, setSummary] = useState<Summary>(defaultSummary);
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
@@ -106,12 +118,23 @@ function App() {
   }
 
   async function refreshSummary() {
-    const next = await invoke<Summary>("get_summary");
-    setSummary(next);
+    try {
+      const next = await invoke<Summary>("get_summary");
+      setSummary(next);
+    } catch (error) {
+      appendLog(`读取 Codex 状态失败：${String(error)}`);
+      setSummary((current) => ({ ...current, provider: "openai" }));
+    }
   }
 
   async function refreshProviders() {
-    const next = await invoke<ProviderConfig[]>("list_providers");
+    let next: ProviderConfig[];
+    try {
+      next = ensureBuiltinOpenAI(await invoke<ProviderConfig[]>("list_providers"));
+    } catch (error) {
+      appendLog(`读取 Provider 列表失败：${String(error)}`);
+      next = [builtinOpenAIProvider];
+    }
     setProviders(next);
     setProviderDraft((current) => {
       if (current.id) return current;
@@ -120,8 +143,12 @@ function App() {
   }
 
   async function loadWebdav() {
-    const next = await invoke<WebDavConfig>("load_webdav_config");
-    setWebdav(next);
+    try {
+      const next = await invoke<WebDavConfig>("load_webdav_config");
+      setWebdav(next);
+    } catch (error) {
+      appendLog(`读取 WebDAV 配置失败：${String(error)}`);
+    }
   }
 
   async function run(label: string, action: () => Promise<string>) {
@@ -438,6 +465,13 @@ function normalizeProvider(provider: ProviderConfig): ProviderConfig {
 function cleanOptional(value?: string) {
   const next = value?.trim();
   return next ? next : undefined;
+}
+
+function ensureBuiltinOpenAI(providers: ProviderConfig[]) {
+  if (providers.some((provider) => provider.id === "openai")) {
+    return providers;
+  }
+  return [builtinOpenAIProvider, ...providers];
 }
 
 function providerSummary(provider?: ProviderConfig) {
