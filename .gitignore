@@ -19,6 +19,9 @@ codex-tools/src-tauri/gen/
 !codex-tools/package-lock.json
 !codex-tools/src-tauri/Cargo.lock
 
+# Local Cargo registry mirrors
+.cargo/
+
 # Local editor files
 .idea/
 .vscode/
