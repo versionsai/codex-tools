@@ -158,12 +158,15 @@ function App() {
     try {
       const message = await action();
       appendLog(message);
+      showToast(message);
       await refreshSummary();
       if (label.includes("Provider")) {
         await refreshProviders();
       }
     } catch (error) {
-      appendLog(`失败：${String(error)}`);
+      const message = `失败：${String(error)}`;
+      appendLog(message);
+      showToast(message);
     } finally {
       setBusy(null);
     }

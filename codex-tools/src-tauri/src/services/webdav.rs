@@ -95,6 +95,13 @@ pub async fn push_threads_impl() -> Result<String> {
     let base_url = normalized_base_url(&config)?;
     let codex = codex_dir()?;
     let local_threads = local_thread_map(&codex)?;
+    if local_threads.is_empty() {
+        return Err(anyhow!(
+            "未找到可推送的本地线程，请确认 Codex 目录是否正确：{}",
+            codex.display()
+        ));
+    }
+    ensure_remote_roots(&client, &base_url).await?;
     let mut remote_manifest = load_remote_manifest(&client, &base_url).await?;
     let remote_entries = remote_file_map(&client, &base_url).await?;
     let remote_by_identity = manifest_identity_map(&remote_manifest);
@@ -105,12 +112,16 @@ pub async fn push_threads_impl() -> Result<String> {
 
     for thread in local_threads.values() {
         let identity = identity_key(&thread.project_name, &thread.thread_id);
-        let remote_path = remote_by_identity
+        let existing_remote_path = remote_by_identity
             .get(&identity)
             .cloned()
-            .or_else(|| manifest_path_by_thread_id(&remote_manifest, &thread.thread_id))
-            .unwrap_or_else(|| thread.relative_path.clone());
-        if remote_path != thread.relative_path && remote_entries.contains_key(&remote_path) {
+            .or_else(|| manifest_path_by_thread_id(&remote_manifest, &thread.thread_id));
+        let remote_path = thread.relative_path.clone();
+        if existing_remote_path.as_deref().is_some_and(|path| path != remote_path)
+            && existing_remote_path
+                .as_deref()
+                .is_some_and(|path| remote_entries.contains_key(path))
+        {
             relocated += 1;
         }
 
@@ -143,13 +154,19 @@ pub async fn push_threads_impl() -> Result<String> {
         )
         .await?;
     }
+    let remote_thread_count = remote_file_map(&client, &base_url)
+        .await?
+        .values()
+        .filter(|entry| thread_id_from_relative(&entry.relative_path).is_some())
+        .count();
 
     Ok(format!(
-        "推送完成：上传 {} 个，跳过 {} 个，路径归并 {} 个，线程索引 {} 条",
+        "推送完成：上传 {} 个，跳过 {} 个，路径归并 {} 个，线程索引 {} 条，远端线程文件 {} 个",
         uploaded,
         skipped,
         relocated,
-        remote_manifest.threads.len()
+        remote_manifest.threads.len(),
+        remote_thread_count
     ))
 }
 
@@ -437,6 +454,13 @@ async fn remote_file_map(client: &Client, base_url: &str) -> Result<HashMap<Stri
         entries.insert(entry.relative_path.clone(), entry);
     }
     Ok(entries)
+}
+
+async fn ensure_remote_roots(client: &Client, base_url: &str) -> Result<()> {
+    for root in SYNC_ROOTS {
+        ensure_remote_directory(client, base_url, root).await?;
+    }
+    Ok(())
 }
 
 async fn list_remote_tree(client: &Client, base_url: &str, relative_root: &str) -> Result<Vec<RemoteEntry>> {
