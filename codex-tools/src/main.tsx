@@ -54,6 +54,7 @@ type LogLine = {
 type ToastState = {
   id: number;
   message: string;
+  variant: "info" | "success" | "error";
 };
 
 type View = "providers" | "provider-form" | "webdav" | "logs";
@@ -117,6 +118,13 @@ function App() {
     await loadWebdav();
   }
 
+  async function refreshAll() {
+    await run("刷新状态", async () => {
+      await bootstrap();
+      return "状态已刷新";
+    });
+  }
+
   async function refreshSummary() {
     try {
       const next = await invoke<Summary>("get_summary");
@@ -155,10 +163,12 @@ function App() {
     if (busy) return;
     setBusy(label);
     appendLog(`开始：${label}`);
+    showToast(`正在${label}...`, "info", 1600);
     try {
-      const message = await action();
+      const result = await action();
+      const message = result.trim() || `${label}已完成`;
       appendLog(message);
-      showToast(message);
+      showToast(message, "success");
       await refreshSummary();
       if (label.includes("Provider")) {
         await refreshProviders();
@@ -166,7 +176,7 @@ function App() {
     } catch (error) {
       const message = `失败：${String(error)}`;
       appendLog(message);
-      showToast(message);
+      showToast(message, "error", 5200);
     } finally {
       setBusy(null);
     }
@@ -176,12 +186,12 @@ function App() {
     setLogs((items) => [{ id: Date.now() + Math.random(), message }, ...items].slice(0, 80));
   }
 
-  function showToast(message: string) {
-    const next = { id: Date.now(), message };
+  function showToast(message: string, variant: ToastState["variant"] = "success", duration = 2600) {
+    const next = { id: Date.now(), message, variant };
     setToast(next);
     window.setTimeout(() => {
       setToast((current) => current?.id === next.id ? null : current);
-    }, 2400);
+    }, duration);
   }
 
   async function saveWebdav() {
@@ -203,7 +213,7 @@ function App() {
     const normalized = normalizeProvider(providerDraft);
     const duplicate = providers.some((provider) => provider.id === normalized.id && provider.id !== editingProviderId);
     if (duplicate) {
-      showToast(`Provider ID「${normalized.id}」已存在，请换一个唯一 ID`);
+      showToast(`Provider ID「${normalized.id}」已存在，请换一个唯一 ID`, "error", 5200);
       appendLog(`Provider ID 重复：${normalized.id}`);
       return;
     }
@@ -238,16 +248,24 @@ function App() {
   }
 
   async function selectProvider(provider: ProviderConfig) {
+    if (busy) return;
+    setBusy(`读取 Provider ${provider.id}`);
+    showToast(`正在读取 Provider ${provider.id}...`, "info", 1600);
     try {
       const latest = await invoke<ProviderConfig>("get_provider", { providerId: provider.id });
       setProviderDraft(toProviderDraft(latest));
       setModelOptions(latest.model ? [latest.model] : []);
       setEditingProviderId(provider.id);
+      showToast(`已打开 Provider：${provider.id}`, "success");
     } catch (error) {
-      appendLog(`读取 Provider 详情失败：${String(error)}`);
+      const message = `读取 Provider 详情失败：${String(error)}`;
+      appendLog(message);
       setProviderDraft(toProviderDraft(provider));
       setModelOptions(provider.model ? [provider.model] : []);
       setEditingProviderId(provider.id);
+      showToast(message, "error", 5200);
+    } finally {
+      setBusy(null);
     }
     setView("provider-form");
   }
@@ -267,7 +285,7 @@ function App() {
 
   return (
     <main className="app-shell">
-      {toast ? <div className="toast">{toast.message}</div> : null}
+      {toast ? <div className={`toast ${toast.variant}`}>{toast.message}</div> : null}
       <header className="switch-topbar">
         <div className="brand">
           <div className="brand-icon"><Cpu size={18} /></div>
@@ -295,7 +313,7 @@ function App() {
             <div className="stat-pills">
               <span>活跃 {summary.active_sessions}</span>
               <span>归档 {summary.archived_sessions}</span>
-              <button disabled={!!busy} onClick={bootstrap}><RefreshCw size={15} />刷新</button>
+              <button disabled={!!busy} onClick={refreshAll}><RefreshCw size={15} />刷新</button>
             </div>
           </div>
 
@@ -430,7 +448,7 @@ function App() {
       <footer>
         <Archive size={14} />
         <span>{summary.codex_dir || "Codex 目录未检测"}</span>
-        <button onClick={bootstrap} disabled={!!busy}><RefreshCw size={13} />刷新</button>
+        <button onClick={refreshAll} disabled={!!busy}><RefreshCw size={13} />刷新</button>
       </footer>
     </main>
   );

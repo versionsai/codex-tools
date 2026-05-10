@@ -866,6 +866,24 @@ footer button {
   backdrop-filter: blur(22px);
 }
 
+.toast.info {
+  border-color: rgba(47, 123, 255, 0.34);
+  color: #174ea6;
+  background: rgba(232, 241, 255, 0.9);
+}
+
+.toast.success {
+  border-color: rgba(22, 163, 74, 0.34);
+  color: #136c35;
+  background: rgba(231, 249, 238, 0.92);
+}
+
+.toast.error {
+  border-color: rgba(220, 38, 38, 0.36);
+  color: #a11c1c;
+  background: rgba(255, 238, 238, 0.94);
+}
+
 .log-list.standalone {
   height: 420px;
 }
