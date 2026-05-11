@@ -1,13 +1,10 @@
-# Codex Sync / Codex Tools
+# Codex Tools
 
-这个仓库里放了两个和 Codex 相关的小工具。
+`Codex Tools` 是给 Codex 用的 Provider 管理和线程同步工具。
 
-我最开始做它们，是因为自己在不同 Provider 之间切来切去之后，Codex 里的旧会话经常“看不见”了。后来又加了 WebDAV 同步、状态栏切换 Provider 这些东西，慢慢就拆成了两个项目：
+它解决的问题很具体：当你在官方 ChatGPT 登录和第三方 API Key Provider 之间来回切换时，Codex 的配置、登录状态和历史线程很容易变得不一致。这个工具把 Provider 配置保存下来，切换时自动写回 Codex，并顺手把本地线程里的 Provider 也合并好。
 
-- `Codex Sync`：macOS 原生 App，主要做 Codex 线程同步和本地线程归并。
-- `Codex Tools`：Tauri 跨平台 App，主要做 Provider 管理、Provider 快速切换和线程归并。
-
-它们都只服务 Codex，不打算做成一个“大而全”的 AI CLI 管理器。
+它不是通用 AI CLI 管理器，也不准备去管 Claude Code、Gemini CLI 或其他工具。这里先把 Codex 这一件事做好。
 
 ## 下载
 
@@ -17,38 +14,64 @@
 
 目前会打包这些文件：
 
-- `Codex.Sync-macos.zip`
-- `Codex.Tools-macos.zip`
-- `Codex.Tools_*.exe`
-- `Codex.Tools_*.msi`
+- `Codex Tools-macos.zip`
+- `Codex Tools_*.exe`
+- `Codex Tools_*.msi`
 
-macOS 如果提示“无法验证开发者”，需要在系统设置里手动允许打开。现在还没有做签名和 notarization，这个后面再补。
+macOS 如果提示“无法验证开发者”或“已损坏”，需要在系统设置里手动允许打开，或移除 quarantine 标记。现在还没有做 Apple Developer ID 签名和 notarization，这个后面再补。
 
 ## 平台状态
 
 目前实际验证过的是 macOS。
 
-`Codex Sync` 和 `Codex Tools` 都已经在 macOS 上跑通过，也做过本机使用验证。
+macOS 下 Provider 切换、Codex 配置写入、线程 Provider 合并、状态栏入口和 WebDAV 推拉都已经做过本机验证。
 
-Windows 现在只是能通过 GitHub Actions 编译出 `.exe` / `.msi` 安装包，还没有在真实 Windows 机器上完整验证 Provider 切换、Codex 配置写入、线程归并这些功能。所以 Windows 制品先当作实验性版本看待，不建议直接拿来放重要环境里用。
+Windows 现在只是能通过 GitHub Actions 编译出 `.exe` / `.msi` 安装包，还没有在真实 Windows 机器上完整验证 Provider 切换、Codex 配置写入、线程归并和托盘行为。所以 Windows 制品先当作实验性版本看待，不建议直接拿来放重要环境里用。
 
-## 两个项目怎么选
+## 功能
 
-如果你只想同步 Codex 线程，或者把本机不同 Provider 下的旧线程合并回来，用 `Codex Sync`。
+- 管理多个 Codex Provider。
+- 固定保留官方 `openai` Provider，用来对应 Codex 官方 ChatGPT 登录模式。
+- 为第三方 API Key Provider 保存独立配置。
+- 切换 Provider 时写入 `~/.codex/config.toml` 和 `~/.codex/auth.json`。
+- 切换后自动合并本地线程 Provider。
+- 通过 WebDAV 推送和拉取 Codex 线程文件。
+- macOS 下常驻状态栏，可以从状态栏菜单直接切 Provider。
 
-如果你经常在官方 ChatGPT 登录和第三方 API Key Provider 之间切换，用 `Codex Tools`。它会保存不同 Provider 的配置，并在切换时写入 Codex 的 `config.toml` 和 `auth.json`。
+## Provider 是怎么处理的
 
-## Codex Sync
+Codex 现在大致有两种使用方式。
 
-`Codex Sync` 是 SwiftUI 写的 macOS App。
+第一种是官方 ChatGPT 登录。也就是 Codex 自己登录 OpenAI 账号，这时 Provider 是内建的 `openai`。Codex Tools 不会写 `[model_providers.openai]`，因为这个 ID 是 Codex 保留的，覆盖它会导致 Codex 报错。
 
-它现在主要做三件事：
+第二种是第三方 API Key。比如你自己填一个 Provider ID、Base URL、API Key、模型和推理强度。切换到这种 Provider 时，Codex Tools 会写入类似这样的配置：
 
-- 通过 WebDAV 把本地 Codex 线程推到远端。
-- 通过 WebDAV 从远端拉回 Codex 线程。
-- 把本地线程里的 `model_provider` 合并成当前 Provider，避免旧会话因为 Provider 名变了而消失。
+```toml
+model_provider = "custom"
+model = "gpt-5.5"
+model_reasoning_effort = "high"
+disable_response_storage = true
 
-同步范围比较克制，只同步和线程相关的文件：
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://example.com/v1"
+```
+
+对应的 `auth.json` 会尽量保持简单：
+
+```json
+{
+  "OPENAI_API_KEY": "sk-..."
+}
+```
+
+切换 Provider 前，工具会先把当前 Provider 的配置保存成快照，再应用目标 Provider。这样你在 Codex 里改了模型或推理强度，回到 Codex Tools 编辑当前 Provider 时，也可以同步回来。
+
+## 同步范围
+
+WebDAV 线程同步只处理和线程相关的文件：
 
 ```text
 ~/.codex/sessions/**/rollout-*.jsonl
@@ -63,56 +86,6 @@ Windows 现在只是能通过 GitHub Actions 编译出 `.exe` / `.msi` 安装包
 ~/.codex/logs_2.sqlite
 *.wal
 *.shm
-```
-
-本地构建：
-
-```bash
-swift build -c release
-./build_swiftui_app.sh
-```
-
-构建后的 App 在：
-
-```text
-dist-swiftui/Codex Sync.app
-```
-
-## Codex Tools
-
-`Codex Tools` 是 Tauri + React + Rust 写的。macOS 已经实际验证过；Windows 目前能编译出安装包，但还没有做完整功能验证。
-
-现在已经有这些功能：
-
-- 管理多个 Codex Provider。
-- 固定保留官方 `openai` Provider，用来对应 Codex 官方 ChatGPT 登录模式。
-- 为第三方 API Key Provider 保存独立配置。
-- 切换 Provider 时写入 `config.toml` 和 `auth.json`。
-- 切换后自动合并本地线程 Provider。
-- macOS 下常驻状态栏，可以从状态栏菜单直接切 Provider。
-
-本地开发：
-
-```bash
-cd codex-tools
-npm install
-npm run tauri dev
-```
-
-打包：
-
-```bash
-npm run build
-npm run tauri build
-```
-
-常见产物位置：
-
-```text
-codex-tools/src-tauri/target/release/bundle/macos/Codex Tools.app
-codex-tools/src-tauri/target/release/bundle/dmg/*.dmg
-codex-tools/src-tauri/target/release/bundle/nsis/*.exe
-codex-tools/src-tauri/target/release/bundle/msi/*.msi
 ```
 
 ## Codex 目录
@@ -141,22 +114,63 @@ $env:CODEX_HOME="D:\Codex\.codex"
 
 代码里不应该写死任何人的本机路径。如果你发现哪里写死了，欢迎直接提 issue。
 
-## 和 cc-switch、codex- 的关系
+## 本地开发
 
-这个项目不是凭空冒出来的。
+需要这些东西：
 
-`Codex Tools` 的 Provider 管理、状态栏常驻、快速切换入口，参考了 `cc-switch` 的思路。`Codex Sync` 的线程同步、WebDAV 推拉、本地多 Provider 线程归并，参考了 `codex-` 方向上的探索。
+- Node.js
+- npm
+- Rust
+- macOS 打包需要 Xcode Command Line Tools
+- Windows 打包建议装 Visual Studio Build Tools
 
-这里不会假装这些想法都是自己发明的。这个仓库只是把这些需求重新收束到 Codex 这一个场景里，做成一个更顺手的小工具。
+安装依赖：
 
-如果你需要 Claude Code / 多 CLI 的切换管理，可以去看 `cc-switch`。如果你关心 Codex 线程同步的早期方案，也建议看看 `codex-`。
+```bash
+npm install
+```
+
+跑开发版：
+
+```bash
+npm run tauri dev
+```
+
+只看前端：
+
+```bash
+npm run dev
+```
+
+## 打包
+
+```bash
+npm run build
+npm run tauri build
+```
+
+macOS 常见产物：
+
+```text
+src-tauri/target/release/bundle/macos/Codex Tools.app
+src-tauri/target/release/bundle/dmg/*.dmg
+```
+
+Windows 常见产物：
+
+```text
+src-tauri/target/release/codex-tools.exe
+src-tauri/target/release/bundle/nsis/*.exe
+src-tauri/target/release/bundle/msi/*.msi
+```
 
 ## CI/CD
 
-仓库里有两条 GitHub Actions：
+仓库里有这些 GitHub Actions：
 
-- `CI`：每次 push / PR 跑 Swift、前端和 Rust 检查。
-- `Release`：推送 `v*` tag 时自动构建 macOS / Windows 产物并发布 Release。这里的 Windows 目前只代表“能编译出包”，不代表已经完成真实环境验证。
+- `CI`：每次 push / PR 跑前端构建和 Rust 检查。
+- `Release`：推送 `v*` tag 时自动构建 macOS / Windows 产物并发布 Release。
+- `Windows Build`：手动或相关路径变更时构建 Windows 安装包。
 
 发布一个新版本大概是这样：
 
@@ -165,32 +179,39 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
+每次重要变更会记录在 [CHANGELOG.md](CHANGELOG.md)。
+
 ## 风险提示
 
-这两个工具都会读写你的 Codex 配置或线程文件。虽然逻辑上会尽量克制，但第一次用之前，最好还是备份一下：
+这个工具会读写：
 
 ```text
-~/.codex
+~/.codex/config.toml
+~/.codex/auth.json
 ```
 
-尤其是你已经有很多长期会话、多个 Provider，或者正在多设备之间同步时，更建议先备份。
+也会修改本地线程文件里的 Provider 字段，并通过 WebDAV 推拉线程文件。第一次用之前建议备份整个 `.codex` 目录，尤其是你已经有很多历史会话的时候。
 
 ## 项目结构
 
 ```text
 .
-├── Package.swift
-├── Sources/CodexSyncNative
-├── build_swiftui_app.sh
-└── codex-tools
-    ├── package.json
-    ├── src
-    └── src-tauri
+├── package.json
+├── src
+├── src-tauri
+├── .github/workflows
+└── README.md
 ```
 
-根目录是 `Codex Sync`，`codex-tools/` 是独立的 Tauri 项目。
+## 和 cc-switch、codex- 的关系
 
-仓库里还保留了一些早期 Python/Tkinter + PyInstaller 的探索脚本。现在标准入口以 SwiftUI 版 `Codex Sync` 和 Tauri 版 `Codex Tools` 为准。
+这个工具的 Provider 切换、状态栏入口、Provider 列表管理，参考了 `cc-switch` 的设计思路。
+
+线程归并和 WebDAV 同步方向，来自 `codex-` 相关探索。
+
+我不想把这些来源藏起来。Codex Tools 只是把这些思路重新整理到 Codex 这个更窄的场景里。
+
+如果你需要更完整的 Claude Code / 多 CLI 的切换，建议直接看 `cc-switch`。如果你想看 Codex 同步方向的早期探索，可以看 `codex-`。
 
 ## License
 

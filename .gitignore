@@ -1,23 +1,17 @@
 .DS_Store
-.build/
 build/
 dist/
-dist-swiftui/
-__pycache__/
-*.pyc
 *.log
 *.tmp
 
-# Python legacy packaging
-*.spec
-
 # Node / Tauri project outputs
-codex-tools/node_modules/
-codex-tools/dist/
-codex-tools/src-tauri/target/
-codex-tools/src-tauri/gen/
-!codex-tools/package-lock.json
-!codex-tools/src-tauri/Cargo.lock
+node_modules/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/.tauri/
+*.dmg
+!package-lock.json
+!src-tauri/Cargo.lock
 
 # Local Cargo registry mirrors
 .cargo/
