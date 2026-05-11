@@ -2,18 +2,6 @@ name: Windows Build
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - master
-    paths:
-      - "src/**"
-      - "src-tauri/**"
-      - "package.json"
-      - "package-lock.json"
-      - "tsconfig.json"
-      - "vite.config.ts"
-      - ".github/workflows/windows-build.yml"
 
 jobs:
   codex-tools-windows:
