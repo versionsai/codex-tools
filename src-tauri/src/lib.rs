@@ -15,7 +15,7 @@ use tauri::{
     image::Image,
     menu::{MenuBuilder, MenuEvent},
     tray::{TrayIcon, TrayIconBuilder},
-    AppHandle, Manager, RunEvent, Runtime, WindowEvent,
+    AppHandle, Emitter, Manager, RunEvent, Runtime, WindowEvent,
 };
 
 const TRAY_ID: &str = "codex-tools-tray";
@@ -23,6 +23,7 @@ const TRAY_OPEN: &str = "tray:open";
 const TRAY_REFRESH: &str = "tray:refresh";
 const TRAY_QUIT: &str = "tray:quit";
 const TRAY_PROVIDER_PREFIX: &str = "tray:provider:";
+const FRONTEND_REFRESH_EVENT: &str = "codex-tools-refresh";
 
 #[tauri::command]
 fn get_summary() -> Result<services::codex::Summary, String> {
@@ -132,6 +133,10 @@ fn refresh_tray_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     Ok(())
 }
 
+fn notify_frontend_refresh<R: Runtime>(app: &AppHandle<R>) {
+    let _ = app.emit(FRONTEND_REFRESH_EVENT, ());
+}
+
 fn handle_tray_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     let id = event.id().0.as_str();
     if id == TRAY_OPEN {
@@ -139,6 +144,7 @@ fn handle_tray_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
             let _ = window.show();
             let _ = window.set_focus();
         }
+        notify_frontend_refresh(app);
         return;
     }
     if id == TRAY_REFRESH {
@@ -155,6 +161,7 @@ fn handle_tray_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
             let _ = unify_thread_provider_impl();
         }
         let _ = refresh_tray_menu(app);
+        notify_frontend_refresh(app);
     }
 }
 
@@ -230,6 +237,7 @@ pub fn run() {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
+            notify_frontend_refresh(app);
         }
         _ => {}
     });
