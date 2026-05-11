@@ -5,7 +5,7 @@ use reqwest::{Client, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -109,6 +109,12 @@ pub async fn push_threads_impl() -> Result<String> {
     let mut uploaded = 0usize;
     let mut skipped = 0usize;
     let mut relocated = 0usize;
+    let mut ensured_remote_dirs = HashSet::new();
+    for entry in remote_entries.values().filter(|entry| !entry.is_directory) {
+        if let Some(parent) = entry.relative_path.rsplit_once('/').map(|(parent, _)| parent) {
+            ensured_remote_dirs.insert(parent.to_string());
+        }
+    }
 
     for thread in local_threads.values() {
         let identity = identity_key(&thread.project_name, &thread.thread_id);
@@ -138,7 +144,13 @@ pub async fn push_threads_impl() -> Result<String> {
             continue;
         }
 
-        ensure_remote_directory(&client, &base_url, parent_relative(&remote_path)).await?;
+        ensure_remote_directory_cached(
+            &client,
+            &base_url,
+            parent_relative(&remote_path),
+            &mut ensured_remote_dirs,
+        )
+        .await?;
         put_remote_file(&client, &base_url, &remote_path, fs::read(&thread.local_path)?).await?;
         uploaded += 1;
     }
@@ -154,19 +166,12 @@ pub async fn push_threads_impl() -> Result<String> {
         )
         .await?;
     }
-    let remote_thread_count = remote_file_map(&client, &base_url)
-        .await?
-        .values()
-        .filter(|entry| thread_id_from_relative(&entry.relative_path).is_some())
-        .count();
-
     Ok(format!(
-        "推送完成：上传 {} 个，跳过 {} 个，路径归并 {} 个，线程索引 {} 条，远端线程文件 {} 个",
+        "推送完成：上传 {} 个，跳过 {} 个，路径归并 {} 个，线程索引 {} 条",
         uploaded,
         skipped,
         relocated,
         remote_manifest.threads.len(),
-        remote_thread_count
     ))
 }
 
@@ -530,6 +535,38 @@ async fn ensure_remote_directory(client: &Client, base_url: &str, relative_dir: 
             return Err(anyhow!("创建远端目录失败：{} HTTP {}", current, response.status().as_u16()));
         }
     }
+    Ok(())
+}
+
+async fn ensure_remote_directory_cached(
+    client: &Client,
+    base_url: &str,
+    relative_dir: &str,
+    ensured: &mut HashSet<String>,
+) -> Result<()> {
+    let normalized = relative_dir.trim_matches('/');
+    if normalized.is_empty() || normalized == "." || ensured.contains(normalized) {
+        return Ok(());
+    }
+
+    let mut current = String::new();
+    let mut missing = Vec::new();
+    for part in normalized.split('/') {
+        current = if current.is_empty() {
+            part.to_string()
+        } else {
+            format!("{}/{}", current, part)
+        };
+        if !ensured.contains(&current) {
+            missing.push(current.clone());
+        }
+    }
+
+    for dir in missing {
+        ensure_remote_directory(client, base_url, &dir).await?;
+        ensured.insert(dir);
+    }
+    ensured.insert(normalized.to_string());
     Ok(())
 }
 
