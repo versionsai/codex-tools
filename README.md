@@ -18,7 +18,21 @@
 - `Codex Tools_*.exe`
 - `Codex Tools_*.msi`
 
-macOS 如果提示“无法验证开发者”或“已损坏”，需要在系统设置里手动允许打开，或移除 quarantine 标记。现在还没有做 Apple Developer ID 签名和 notarization，这个后面再补。
+macOS 版本暂时没有做 Apple Developer ID 签名和 notarization。下载 `Codex Tools-macos.zip` 后，解压会得到：
+
+```text
+Codex Tools-macos/
+├── Codex Tools.app
+└── install.command
+```
+
+双击 `install.command` 会自动把 `Codex Tools.app` 安装到 `/Applications`，并执行：
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Codex Tools.app"
+```
+
+如果 macOS 提示是否允许运行脚本，请选择允许。这个脚本只做三件事：复制 App 到 `/Applications`、移除 quarantine 标记、打开 Codex Tools。
 
 ## 平台状态
 

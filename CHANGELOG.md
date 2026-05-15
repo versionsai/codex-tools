@@ -6,6 +6,13 @@
 
 ## 未发布
 
+## v0.1.8 - 2026-05-15
+
+### 变更
+
+- macOS Release zip 新增 `install.command`，支持双击安装 `Codex Tools.app` 到 `/Applications` 并自动移除 quarantine 属性。
+- 更新 README，说明 macOS 未公证版本的 `install.command` 安装流程。
+
 ## v0.1.7 - 2026-05-11
 
 ### 变更

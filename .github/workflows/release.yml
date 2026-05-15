@@ -59,7 +59,12 @@ jobs:
         if: matrix.os == 'windows-latest'
 
       - name: Archive macOS app
-        run: ditto -c -k --sequesterRsrc --keepParent "src-tauri/target/release/bundle/macos/Codex Tools.app" "Codex Tools-macos.zip"
+        run: |
+          mkdir -p "release/Codex Tools-macos"
+          ditto "src-tauri/target/release/bundle/macos/Codex Tools.app" "release/Codex Tools-macos/Codex Tools.app"
+          cp scripts/install-macos.command "release/Codex Tools-macos/install.command"
+          chmod +x "release/Codex Tools-macos/install.command"
+          ditto -c -k --sequesterRsrc --keepParent "release/Codex Tools-macos" "Codex Tools-macos.zip"
         if: matrix.os == 'macos-15'
 
       - name: Upload artifact
