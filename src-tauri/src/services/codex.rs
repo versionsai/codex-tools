@@ -1,8 +1,10 @@
 use super::paths::{app_config_dir, auth_json_path, codex_dir, config_toml_path, providers_config_path};
 use anyhow::{anyhow, Result};
+use chrono::{DateTime, Local};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::{BTreeMap, HashSet};
 use std::{fs, path::Path};
 use toml_edit::{value, DocumentMut, Item, Value as TomlValue};
 use walkdir::WalkDir;
@@ -37,6 +39,50 @@ pub struct ModelOption {
     pub id: String,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct TokenUsage {
+    pub input_tokens: i64,
+    pub cached_input_tokens: i64,
+    pub output_tokens: i64,
+    pub reasoning_output_tokens: i64,
+    pub total_tokens: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DailyUsage {
+    pub date: String,
+    pub input_tokens: i64,
+    pub cached_input_tokens: i64,
+    pub output_tokens: i64,
+    pub reasoning_output_tokens: i64,
+    pub total_tokens: i64,
+    pub cost_usd: f64,
+    pub events: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderUsage {
+    pub provider: String,
+    pub input_tokens: i64,
+    pub cached_input_tokens: i64,
+    pub output_tokens: i64,
+    pub reasoning_output_tokens: i64,
+    pub total_tokens: i64,
+    pub cost_usd: f64,
+    pub events: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UsageSummary {
+    pub codex_dir: String,
+    pub days: Vec<DailyUsage>,
+    pub providers: Vec<ProviderUsage>,
+    pub total: TokenUsage,
+    pub total_cost_usd: f64,
+    pub files_scanned: usize,
+    pub usage_events: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ProviderStore {
     providers: Vec<ProviderConfig>,
@@ -49,6 +95,125 @@ pub fn get_summary_impl() -> Result<Summary> {
         active_sessions: rollout_count(&dir.join("sessions")),
         archived_sessions: rollout_count(&dir.join("archived_sessions")),
         codex_dir: dir.display().to_string(),
+    })
+}
+
+pub fn get_usage_summary_impl() -> Result<UsageSummary> {
+    let dir = codex_dir()?;
+    let rollout_files = rollout_paths(&dir.join("sessions"));
+    let mut days = BTreeMap::<String, DailyUsage>::new();
+    let mut providers = BTreeMap::<String, ProviderUsage>::new();
+    let mut seen_events = HashSet::<String>::new();
+    let mut total = TokenUsage::default();
+    let mut total_cost_usd = 0.0f64;
+    let mut usage_events = 0usize;
+
+    for file in &rollout_files {
+        let content = fs::read_to_string(file)?;
+        let mut previous_total: Option<TokenUsage> = None;
+        let mut current_provider = "unknown".to_string();
+        let mut current_model: Option<String> = None;
+        for line in content.lines().filter(|line| !line.trim().is_empty()) {
+            let Ok(value) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            if let Some(provider) = value.pointer("/payload/model_provider").and_then(Value::as_str) {
+                current_provider = provider.to_string();
+            }
+            if let Some(model) = model_from_value(&value) {
+                current_model = Some(model);
+            }
+            if value.pointer("/payload/type").and_then(Value::as_str) != Some("token_count") {
+                continue;
+            }
+            let info = value.pointer("/payload/info");
+            let last_usage = usage_from_value(info.and_then(|info| info.get("last_token_usage")));
+            let current_total = usage_from_value(info.and_then(|info| info.get("total_token_usage")));
+            let Some(delta) = last_usage.or_else(|| {
+                current_total
+                    .as_ref()
+                    .map(|current| {
+                        previous_total
+                            .as_ref()
+                            .map(|last| current.saturating_delta(last))
+                            .unwrap_or_else(|| current.clone())
+                    })
+            }) else {
+                continue;
+            };
+            if let Some(current) = current_total {
+                previous_total = Some(current);
+            }
+            let delta = delta.normalized();
+            if delta.input_tokens <= 0
+                && delta.cached_input_tokens <= 0
+                && delta.output_tokens <= 0
+                && delta.reasoning_output_tokens <= 0
+            {
+                continue;
+            }
+            let date = timestamp_date(&value).unwrap_or_else(|| "unknown".to_string());
+            let model = info
+                .and_then(model_from_info)
+                .or_else(|| current_model.clone())
+                .unwrap_or_else(|| "gpt-5".to_string());
+            let event_key = usage_event_key(value.get("timestamp").and_then(Value::as_str), &model, &delta);
+            if !seen_events.insert(event_key) {
+                continue;
+            }
+            let cost_usd = estimate_usage_cost_usd(&model, &delta);
+            usage_events += 1;
+            total.add(&delta);
+            total_cost_usd += cost_usd;
+            let daily = days.entry(date.clone()).or_insert_with(|| DailyUsage {
+                date,
+                input_tokens: 0,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                reasoning_output_tokens: 0,
+                total_tokens: 0,
+                cost_usd: 0.0,
+                events: 0,
+            });
+            daily.input_tokens += delta.input_tokens;
+            daily.cached_input_tokens += delta.cached_input_tokens;
+            daily.output_tokens += delta.output_tokens;
+            daily.reasoning_output_tokens += delta.reasoning_output_tokens;
+            daily.total_tokens += delta.total_tokens;
+            daily.cost_usd += cost_usd;
+            daily.events += 1;
+            let provider = providers.entry(current_provider.clone()).or_insert_with(|| ProviderUsage {
+                provider: current_provider.clone(),
+                input_tokens: 0,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                reasoning_output_tokens: 0,
+                total_tokens: 0,
+                cost_usd: 0.0,
+                events: 0,
+            });
+            provider.input_tokens += delta.input_tokens;
+            provider.cached_input_tokens += delta.cached_input_tokens;
+            provider.output_tokens += delta.output_tokens;
+            provider.reasoning_output_tokens += delta.reasoning_output_tokens;
+            provider.total_tokens += delta.total_tokens;
+            provider.cost_usd += cost_usd;
+            provider.events += 1;
+        }
+    }
+
+    let mut days = days.into_values().collect::<Vec<_>>();
+    days.reverse();
+    let mut providers = providers.into_values().collect::<Vec<_>>();
+    providers.sort_by(|left, right| right.total_tokens.cmp(&left.total_tokens));
+    Ok(UsageSummary {
+        codex_dir: dir.display().to_string(),
+        days,
+        providers,
+        total,
+        total_cost_usd,
+        files_scanned: rollout_files.len(),
+        usage_events,
     })
 }
 
@@ -73,6 +238,181 @@ pub fn list_providers_impl() -> Result<Vec<ProviderConfig>> {
         provider.config_toml = None;
     }
     Ok(visible)
+}
+
+impl TokenUsage {
+    fn add(&mut self, other: &TokenUsage) {
+        self.input_tokens += other.input_tokens;
+        self.cached_input_tokens += other.cached_input_tokens;
+        self.output_tokens += other.output_tokens;
+        self.reasoning_output_tokens += other.reasoning_output_tokens;
+        self.total_tokens += other.total_tokens;
+    }
+
+    fn saturating_delta(&self, previous: &TokenUsage) -> TokenUsage {
+        TokenUsage {
+            input_tokens: (self.input_tokens - previous.input_tokens).max(0),
+            cached_input_tokens: (self.cached_input_tokens - previous.cached_input_tokens).max(0),
+            output_tokens: (self.output_tokens - previous.output_tokens).max(0),
+            reasoning_output_tokens: (self.reasoning_output_tokens - previous.reasoning_output_tokens).max(0),
+            total_tokens: (self.total_tokens - previous.total_tokens).max(0),
+        }
+    }
+
+    fn normalized(&self) -> TokenUsage {
+        let cached_input_tokens = self.cached_input_tokens.min(self.input_tokens).max(0);
+        let total_tokens = if self.total_tokens > 0 {
+            self.total_tokens
+        } else {
+            self.input_tokens + self.output_tokens + self.reasoning_output_tokens
+        };
+        TokenUsage {
+            input_tokens: self.input_tokens.max(0),
+            cached_input_tokens,
+            output_tokens: self.output_tokens.max(0),
+            reasoning_output_tokens: self.reasoning_output_tokens.max(0),
+            total_tokens: total_tokens.max(0),
+        }
+    }
+}
+
+fn usage_from_value(value: Option<&Value>) -> Option<TokenUsage> {
+    let value = value?;
+    Some(TokenUsage {
+        input_tokens: value.get("input_tokens").and_then(Value::as_i64).unwrap_or_default(),
+        cached_input_tokens: value
+            .get("cached_input_tokens")
+            .or_else(|| value.get("cache_read_input_tokens"))
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
+        output_tokens: value.get("output_tokens").and_then(Value::as_i64).unwrap_or_default(),
+        reasoning_output_tokens: value
+            .get("reasoning_output_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
+        total_tokens: value.get("total_tokens").and_then(Value::as_i64).unwrap_or_default(),
+    })
+}
+
+fn model_from_value(value: &Value) -> Option<String> {
+    value
+        .pointer("/payload/info")
+        .and_then(model_from_info)
+        .or_else(|| value.pointer("/payload/model").and_then(value_string))
+        .or_else(|| value.pointer("/payload/model_name").and_then(value_string))
+        .or_else(|| value.pointer("/payload/metadata/model").and_then(value_string))
+}
+
+fn model_from_info(info: &Value) -> Option<String> {
+    info.get("model")
+        .and_then(value_string)
+        .or_else(|| info.get("model_name").and_then(value_string))
+        .or_else(|| info.pointer("/metadata/model").and_then(value_string))
+}
+
+fn value_string(value: &Value) -> Option<String> {
+    value.as_str().map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned)
+}
+
+fn usage_event_key(timestamp: Option<&str>, model: &str, usage: &TokenUsage) -> String {
+    format!(
+        "{}|{}|{}|{}|{}|{}|{}",
+        timestamp.unwrap_or_default(),
+        model,
+        usage.input_tokens,
+        usage.cached_input_tokens,
+        usage.output_tokens,
+        usage.reasoning_output_tokens,
+        usage.total_tokens
+    )
+}
+
+fn timestamp_date(value: &Value) -> Option<String> {
+    let raw = value.get("timestamp").and_then(Value::as_str)?;
+    DateTime::parse_from_rfc3339(raw)
+        .map(|time| time.with_timezone(&Local).date_naive().to_string())
+        .ok()
+        .or_else(|| raw.get(0..10).map(ToOwned::to_owned))
+}
+
+struct ModelPricing {
+    input_per_million: f64,
+    cached_input_per_million: f64,
+    output_per_million: f64,
+}
+
+fn estimate_usage_cost_usd(model: &str, usage: &TokenUsage) -> f64 {
+    let Some(pricing) = pricing_for_model(model) else {
+        return 0.0;
+    };
+    let cached_input = usage.cached_input_tokens.max(0) as f64;
+    let fresh_input = (usage.input_tokens - usage.cached_input_tokens).max(0) as f64;
+    let output = usage.output_tokens.max(0) as f64;
+    ((fresh_input * pricing.input_per_million)
+        + (cached_input * pricing.cached_input_per_million)
+        + (output * pricing.output_per_million))
+        / 1_000_000.0
+}
+
+fn pricing_for_model(model: &str) -> Option<ModelPricing> {
+    let normalized = model.trim().to_ascii_lowercase();
+    if normalized.starts_with("gpt-5.5-pro") || normalized.starts_with("gpt-5.4-pro") {
+        return Some(ModelPricing {
+            input_per_million: 30.0,
+            cached_input_per_million: 3.0,
+            output_per_million: 180.0,
+        });
+    }
+    if normalized.starts_with("gpt-5.5") {
+        return Some(ModelPricing {
+            input_per_million: 5.0,
+            cached_input_per_million: 0.5,
+            output_per_million: 30.0,
+        });
+    }
+    if normalized.starts_with("gpt-5.4-mini") {
+        return Some(ModelPricing {
+            input_per_million: 0.75,
+            cached_input_per_million: 0.075,
+            output_per_million: 4.5,
+        });
+    }
+    if normalized.starts_with("gpt-5.4-nano") {
+        return Some(ModelPricing {
+            input_per_million: 0.2,
+            cached_input_per_million: 0.02,
+            output_per_million: 1.25,
+        });
+    }
+    if normalized.starts_with("gpt-5.4") {
+        return Some(ModelPricing {
+            input_per_million: 2.5,
+            cached_input_per_million: 0.25,
+            output_per_million: 15.0,
+        });
+    }
+    if normalized.starts_with("gpt-5-mini") {
+        return Some(ModelPricing {
+            input_per_million: 0.25,
+            cached_input_per_million: 0.025,
+            output_per_million: 2.0,
+        });
+    }
+    if normalized.starts_with("gpt-5-nano") {
+        return Some(ModelPricing {
+            input_per_million: 0.05,
+            cached_input_per_million: 0.005,
+            output_per_million: 0.4,
+        });
+    }
+    if normalized.starts_with("gpt-5") {
+        return Some(ModelPricing {
+            input_per_million: 1.25,
+            cached_input_per_million: 0.125,
+            output_per_million: 10.0,
+        });
+    }
+    None
 }
 
 pub fn get_provider_impl(provider_id: &str) -> Result<ProviderConfig> {

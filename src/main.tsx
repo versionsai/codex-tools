@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   Archive,
+  BarChart3,
   CheckCircle2,
   CloudDownload,
   CloudUpload,
@@ -47,6 +48,36 @@ type WebDavConfig = {
   verify_tls: boolean;
 };
 
+type TokenUsage = {
+  input_tokens: number;
+  cached_input_tokens: number;
+  output_tokens: number;
+  reasoning_output_tokens: number;
+  total_tokens: number;
+};
+
+type DailyUsage = TokenUsage & {
+  date: string;
+  cost_usd: number;
+  events: number;
+};
+
+type ProviderUsage = TokenUsage & {
+  provider: string;
+  cost_usd: number;
+  events: number;
+};
+
+type UsageSummary = {
+  codex_dir: string;
+  days: DailyUsage[];
+  providers: ProviderUsage[];
+  total: TokenUsage;
+  total_cost_usd: number;
+  files_scanned: number;
+  usage_events: number;
+};
+
 type LogLine = {
   id: number;
   message: string;
@@ -58,7 +89,7 @@ type ToastState = {
   variant: "info" | "success" | "error";
 };
 
-type View = "providers" | "provider-form" | "webdav" | "logs";
+type View = "providers" | "provider-form" | "usage" | "webdav" | "logs";
 type ModelOption = { id: string };
 
 const defaultSummary: Summary = {
@@ -92,6 +123,22 @@ const builtinOpenAIProvider: ProviderConfig = {
   requires_openai_auth: false,
 };
 
+const emptyUsage: UsageSummary = {
+  codex_dir: "",
+  days: [],
+  providers: [],
+  total: {
+    input_tokens: 0,
+    cached_input_tokens: 0,
+    output_tokens: 0,
+    reasoning_output_tokens: 0,
+    total_tokens: 0,
+  },
+  total_cost_usd: 0,
+  files_scanned: 0,
+  usage_events: 0,
+};
+
 function App() {
   const [summary, setSummary] = useState<Summary>(defaultSummary);
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
@@ -103,6 +150,7 @@ function App() {
     password: "",
     verify_tls: true,
   });
+  const [usage, setUsage] = useState<UsageSummary>(emptyUsage);
   const [busy, setBusy] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogLine[]>([]);
   const [modelOptions, setModelOptions] = useState<string[]>([]);
@@ -136,6 +184,7 @@ function App() {
   async function bootstrap() {
     await refreshSummary();
     await refreshProviders();
+    await loadUsage();
     await loadWebdav();
   }
 
@@ -177,6 +226,15 @@ function App() {
       setWebdav(next);
     } catch (error) {
       appendLog(`读取 WebDAV 配置失败：${String(error)}`);
+    }
+  }
+
+  async function loadUsage() {
+    try {
+      setUsage(await invoke<UsageSummary>("get_usage_summary"));
+    } catch (error) {
+      appendLog(`读取 Codex 用量失败：${String(error)}`);
+      setUsage(emptyUsage);
     }
   }
 
@@ -318,6 +376,7 @@ function App() {
           <button className="tip-button" data-tip="拉取远端线程" aria-label="拉取远端线程" title="拉取远端线程" disabled={!!busy} onClick={() => run("拉取远端线程", () => invoke("pull_threads"))}><CloudDownload size={18} /></button>
           <button className="tip-button" data-tip="推送本地线程" aria-label="推送本地线程" title="推送本地线程" disabled={!!busy} onClick={() => run("推送本地线程", () => invoke("push_threads"))}><CloudUpload size={18} /></button>
           <button className="tip-button" data-tip="合并 Provider 线程" aria-label="合并 Provider 线程" title="合并 Provider 线程" disabled={!!busy} onClick={() => run("合并 Provider 线程", () => invoke("unify_thread_provider"))}><Shuffle size={18} /></button>
+          <button title="用量统计" aria-label="用量统计" data-tip="用量统计" className={`tip-button ${view === "usage" ? "active" : ""}`} onClick={() => setView("usage")}><BarChart3 size={18} /></button>
           <button title="WebDAV 配置" aria-label="WebDAV 配置" data-tip="WebDAV 配置" className={`tip-button ${view === "webdav" ? "active" : ""}`} onClick={() => setView("webdav")}><Settings2 size={18} /></button>
           <button title="运行日志" aria-label="运行日志" data-tip="运行日志" className={`tip-button ${view === "logs" ? "active" : ""}`} onClick={() => setView("logs")}><TerminalSquare size={18} /></button>
         </div>
@@ -420,6 +479,98 @@ function App() {
               <button className="editor-action primary-action" disabled={!!busy || !providerDraft.id || duplicateProviderId} onClick={saveProvider}><Save size={16} />保存 Provider</button>
               <button className="editor-action" disabled={!!busy || !providerCanSwitch} onClick={() => switchProvider(providerDraft.id)}><Shuffle size={16} />切换并合并</button>
               <button className="editor-action danger-action" disabled={!!busy || !providerCanDelete} onClick={() => deleteProvider()}><Trash2 size={16} />删除</button>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {view === "usage" ? (
+        <section className="usage-page">
+          <button className="back-btn" onClick={() => setView("providers")}>返回</button>
+          <div className="board-meta">
+            <div>
+              <h2>Codex 用量统计</h2>
+              <p>基于本地 JSONL 离线统计，Cost 统一按 OpenAI 官方模型价格估算</p>
+            </div>
+            <div className="stat-pills">
+              <span>文件 {usage.files_scanned}</span>
+              <span>事件 {usage.usage_events}</span>
+              <button disabled={!!busy} onClick={loadUsage}><RefreshCw size={15} />刷新</button>
+            </div>
+          </div>
+
+          <div className="usage-summary-grid">
+            <div className="usage-metric-card">
+              <span>估算 Cost</span>
+              <strong>{formatUsd(usage.total_cost_usd)}</strong>
+            </div>
+            <div className="usage-metric-card">
+              <span>总 Token</span>
+              <strong>{formatToken(usage.total.total_tokens)}</strong>
+            </div>
+            <div className="usage-metric-card">
+              <span>输入 Token</span>
+              <strong>{formatToken(usage.total.input_tokens)}</strong>
+            </div>
+            <div className="usage-metric-card">
+              <span>缓存输入</span>
+              <strong>{formatToken(usage.total.cached_input_tokens)}</strong>
+            </div>
+          </div>
+
+          <div className="usage-table-card glass provider-usage-card">
+            <div className="usage-table-title">Provider 汇总</div>
+            <div className="usage-table-head provider-head">
+              <span>Provider</span>
+              <span>Cost</span>
+              <span>总量</span>
+              <span>输入</span>
+              <span>缓存</span>
+              <span>输出</span>
+              <span>事件</span>
+            </div>
+            <div className="usage-table-body provider-body">
+              {usage.providers.length === 0 ? <p className="empty">暂无 Provider 维度数据</p> : null}
+              {usage.providers.map((provider) => (
+                <div className="usage-row provider-row" key={provider.provider}>
+                  <span>{provider.provider}</span>
+                  <strong>{formatUsd(provider.cost_usd)}</strong>
+                  <span>{formatToken(provider.total_tokens)}</span>
+                  <span>{formatToken(provider.input_tokens)}</span>
+                  <span>{formatToken(provider.cached_input_tokens)}</span>
+                  <span>{formatToken(provider.output_tokens)}</span>
+                  <span>{provider.events}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="usage-table-card glass">
+            <div className="usage-table-title">每日用量</div>
+            <div className="usage-table-head">
+              <span>日期</span>
+              <span>Cost</span>
+              <span>总量</span>
+              <span>输入</span>
+              <span>缓存</span>
+              <span>输出</span>
+              <span>推理</span>
+              <span>事件</span>
+            </div>
+            <div className="usage-table-body">
+              {usage.days.length === 0 ? <p className="empty">暂无可统计的 Codex token_count 记录</p> : null}
+              {usage.days.map((day) => (
+                <div className="usage-row" key={day.date}>
+                  <span>{day.date}</span>
+                  <strong>{formatUsd(day.cost_usd)}</strong>
+                  <span>{formatToken(day.total_tokens)}</span>
+                  <span>{formatToken(day.input_tokens)}</span>
+                  <span>{formatToken(day.cached_input_tokens)}</span>
+                  <span>{formatToken(day.output_tokens)}</span>
+                  <span>{formatToken(day.reasoning_output_tokens)}</span>
+                  <span>{day.events}</span>
+                </div>
+              ))}
             </div>
           </div>
         </section>
@@ -548,6 +699,18 @@ function providerDefaults(providerId?: string): Required<Omit<ProviderConfig, "i
 
 function uniqueOptions(current: string | undefined, options: string[]) {
   return Array.from(new Set([current || "gpt-5.4", ...options].filter(Boolean)));
+}
+
+function formatToken(value: number) {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return String(value);
+}
+
+function formatUsd(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "$0.00";
+  if (value < 0.01) return `$${value.toFixed(4)}`;
+  return `$${value.toFixed(2)}`;
 }
 
 function Metric({ label, value, accent }: { label: string; value: string | number; accent: "blue" | "green" | "purple" }) {

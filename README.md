@@ -49,8 +49,29 @@ Windows 现在只是能通过 GitHub Actions 编译出 `.exe` / `.msi` 安装包
 - 为第三方 API Key Provider 保存独立配置。
 - 切换 Provider 时写入 `~/.codex/config.toml` 和 `~/.codex/auth.json`。
 - 切换后自动合并本地线程 Provider。
+- 查看 Codex 本地用量统计，按日期和 Provider 汇总 token 与预估 Cost。
 - 通过 WebDAV 推送和拉取 Codex 线程文件。
 - macOS 下常驻状态栏，可以从状态栏菜单直接切 Provider。
+
+## 用量统计
+
+`Codex Tools` 可以离线读取本机 Codex 线程日志，展示每天的输入、缓存输入、输出、推理输出、总 token 和预估 Cost，也会按 Provider 汇总总量。
+
+统计口径对齐：
+
+```bash
+npx ccusage@latest codex daily --config /tmp/no-such-ccusage.json --offline
+```
+
+具体规则：
+
+- 只读取 `~/.codex/sessions/**/*.jsonl`，不把 `archived_sessions` 纳入用量页，避免历史归档重复计入。
+- 优先使用日志里的 `last_token_usage`；缺失时再用 `total_token_usage` 和上一条累计值计算增量。
+- 使用 `timestamp + model + token usage` 去重，避免同一条 token 事件重复计数。
+- 日期按本机时区聚合。
+- Cost 按 OpenAI 官方模型价格估算，用来统一比较不同 Provider 下的消耗。
+
+这个页面只做本地离线统计，不会上传日志，也不会调用远端接口查询用量。
 
 ## Provider 是怎么处理的
 

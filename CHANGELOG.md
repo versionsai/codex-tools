@@ -6,6 +6,14 @@
 
 ## 未发布
 
+暂无。
+
+## v0.1.9 - 2026-05-18
+
+### 新增
+
+- 新增 Codex 用量统计页，离线扫描本地 `sessions` JSONL 中的 `token_count` 事件，按日期和 Provider 汇总输入、缓存输入、输出、推理输出、总 token，并按 OpenAI 官方价格估算 Cost；统计口径对齐 `ccusage codex daily --offline`。
+
 ## v0.1.8 - 2026-05-15
 
 ### 变更

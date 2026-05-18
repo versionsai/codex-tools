@@ -3,7 +3,8 @@ mod services;
 use services::{
     codex::{
         delete_provider_impl, fetch_provider_models_impl, get_provider_impl, get_summary_impl,
-        list_providers_impl, save_provider_impl, switch_provider_impl, unify_thread_provider_impl,
+        get_usage_summary_impl, list_providers_impl, save_provider_impl, switch_provider_impl,
+        unify_thread_provider_impl,
     },
     webdav::{
         load_webdav_config_impl, pull_threads_impl, push_threads_impl, save_webdav_config_impl,
@@ -28,6 +29,11 @@ const FRONTEND_REFRESH_EVENT: &str = "codex-tools-refresh";
 #[tauri::command]
 fn get_summary() -> Result<services::codex::Summary, String> {
     get_summary_impl().map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn get_usage_summary() -> Result<services::codex::UsageSummary, String> {
+    get_usage_summary_impl().map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -201,6 +207,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_summary,
+            get_usage_summary,
             list_providers,
             get_provider,
             save_provider,

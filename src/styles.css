@@ -648,6 +648,7 @@ footer button {
 }
 
 .provider-board,
+.usage-page,
 .detail-page {
   width: min(100%, 1720px);
   margin: 42px auto 0;
@@ -847,6 +848,96 @@ footer button {
 
 .detail-actions .editor-action {
   flex: 1;
+}
+
+.usage-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.usage-metric-card {
+  min-height: 104px;
+  border: 1px solid rgba(202, 211, 227, 0.68);
+  border-radius: 20px;
+  padding: 20px;
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow: 0 12px 34px rgba(70, 92, 130, 0.055), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+}
+
+.usage-metric-card span {
+  display: block;
+  color: #7a8498;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.usage-metric-card strong {
+  display: block;
+  margin-top: 10px;
+  color: #101828;
+  font-size: 26px;
+  letter-spacing: 0;
+}
+
+.usage-table-card {
+  border-radius: 24px;
+  padding: 14px;
+}
+
+.provider-usage-card {
+  margin-bottom: 18px;
+}
+
+.usage-table-title {
+  padding: 4px 16px 8px;
+  color: #101828;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.usage-table-head,
+.usage-row {
+  display: grid;
+  grid-template-columns: 1.15fr repeat(7, minmax(88px, 1fr));
+  align-items: center;
+  gap: 12px;
+}
+
+.provider-head,
+.provider-row {
+  grid-template-columns: 1.4fr repeat(6, minmax(92px, 1fr));
+}
+
+.usage-table-head {
+  height: 42px;
+  padding: 0 16px;
+  color: #7a8498;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.usage-table-body {
+  max-height: 470px;
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+}
+
+.usage-row {
+  min-height: 48px;
+  border: 1px solid rgba(174, 188, 214, 0.26);
+  border-radius: 16px;
+  padding: 0 16px;
+  color: #4f5b6f;
+  font-size: 13px;
+  font-weight: 800;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.usage-row strong {
+  color: #1277ff;
 }
 
 .toast {
