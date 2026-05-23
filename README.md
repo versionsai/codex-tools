@@ -36,15 +36,15 @@ xattr -dr com.apple.quarantine "/Applications/Codex Tools.app"
 
 ## 平台状态
 
-目前实际验证过的是 macOS。
+当前只面向 `macOS` 和 `Windows`，不考虑 Linux。
 
-macOS 下 Provider 切换、Codex 配置写入、线程 Provider 合并、状态栏入口和 WebDAV 推拉都已经做过本机验证。
+macOS 下 Provider 切换、Codex 配置写入、线程 Provider 合并、状态栏入口、WebDAV 推拉，以及“切换 Provider 后自动重启 Codex”都已经做过本机验证。
 
-Windows 现在只是能通过 GitHub Actions 编译出 `.exe` / `.msi` 安装包，还没有在真实 Windows 机器上完整验证 Provider 切换、Codex 配置写入、线程归并和托盘行为。所以 Windows 制品先当作实验性版本看待，不建议直接拿来放重要环境里用。
+Windows 现在主要通过 GitHub Actions 产出 `.exe` / `.msi` 安装包，并按常见安装目录实现了 Codex 自动重启逻辑；但还没有在真实 Windows 机器上完整验证 Provider 切换、线程归并、托盘行为和自动重启流程，所以 Windows 制品仍建议先按实验性版本看待。
 
 ## 当前内置模块
 
-- Provider 管理：保存多个 Codex Provider，切换后自动写回 Codex 配置，并顺手统一本地线程里的 Provider。
+- Provider 管理：保存多个 Codex Provider，切换后自动写回 Codex 配置、统一本地线程里的 Provider，并自动重启 Codex 桌面应用。
 - 用量统计：离线统计本地 `sessions` JSONL 中的 token，用日期和 Provider 两个维度展示总量与预估 Cost。
 - 微信连接：Codex Tools 内置微信连接引擎，负责项目选择、扫码登录、服务启动和通信状态展示。
 - WebDAV 同步：推送和拉取 Codex 线程文件，支持 `sessions`、`archived_sessions` 与 `session_index.jsonl`。

@@ -27,6 +27,22 @@
 - 微信连接 UI 调整为“顶部状态 + 登录卡片 + 项目/权限侧栏”的结构；顶部只保留一个聚合状态，登录卡片将二维码和操作按钮分行展示，并在顶部展示当前选择项目。
 - 微信连接状态以配置文件为权威来源，页面打开和窗口聚焦时会重新读取配置；用户手动修改权限模式后也能正确回显。
 
+## v0.1.11 - 2026-05-23
+
+### 变更
+
+- Provider 切换后会自动重启本机 Codex 桌面应用，避免 Codex Tools 已切换成功但 Codex 主程序仍停留在旧 Provider 的状态。
+- 主窗口内切换 Provider 时，在写入 Codex 配置并统一线程 Provider 后，会继续触发 Codex 重启，让切换动作形成闭环。
+- macOS 状态栏菜单切换 Provider 时，同样会自动执行 Codex 重启，保证状态栏入口与主窗口行为一致。
+- Codex 桌面应用查找逻辑改为按平台查找常见安装位置：macOS 支持 `/Applications/Codex.app` 与 `~/Applications/Codex.app`，Windows 支持常见的 `Codex.exe` 安装目录。
+- 当前版本的平台目标进一步明确为 macOS 与 Windows；Linux 暂未实现 Provider 切换后的 Codex 自动重启。
+
+### 验证
+
+- `cargo check`
+- `npm run build`
+- `npm run tauri build`
+
 ## v0.1.9 - 2026-05-18
 
 ### 新增

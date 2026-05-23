@@ -7,7 +7,13 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+    thread,
+    time::Duration,
+};
 use toml_edit::{value, DocumentMut, Item, Value as TomlValue};
 use walkdir::WalkDir;
 
@@ -546,6 +552,88 @@ pub fn switch_provider_impl(provider_id: &str) -> Result<()> {
     apply_provider_to_codex(&provider)?;
     write_provider_store(&store)?;
     Ok(())
+}
+
+pub fn restart_codex_app_impl() -> Result<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let app_path = find_codex_app_path_macos()
+            .ok_or_else(|| anyhow!("未找到 Codex.app，请确认已安装桌面版 Codex"))?;
+        let _ = Command::new("osascript")
+            .args(["-e", "tell application \"Codex\" to quit"])
+            .status();
+        thread::sleep(Duration::from_millis(900));
+        let open_status = Command::new("open")
+            .args(["-a", &app_path.display().to_string()])
+            .status()?;
+        if !open_status.success() {
+            return Err(anyhow!("重新打开 Codex 失败"));
+        }
+        return Ok("已重启 Codex".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let exe_path = find_codex_exe_path_windows()
+            .ok_or_else(|| anyhow!("未找到 Codex.exe，请确认已安装桌面版 Codex"))?;
+        let _ = Command::new("taskkill")
+            .args(["/IM", "Codex.exe", "/T", "/F"])
+            .status();
+        thread::sleep(Duration::from_millis(900));
+        let open_status = Command::new("cmd")
+            .args(["/C", "start", "", &exe_path.display().to_string()])
+            .status()?;
+        if !open_status.success() {
+            return Err(anyhow!("重新打开 Codex 失败"));
+        }
+        return Ok("已重启 Codex".to_string());
+    }
+
+    #[allow(unreachable_code)]
+    Err(anyhow!("当前平台暂未实现自动重启 Codex"))
+}
+
+#[cfg(target_os = "macos")]
+fn find_codex_app_path_macos() -> Option<PathBuf> {
+    let candidates = [
+        PathBuf::from("/Applications/Codex.app"),
+        dirs::home_dir()?.join("Applications").join("Codex.app"),
+    ];
+    candidates.into_iter().find(|path| path.exists())
+}
+
+#[cfg(target_os = "windows")]
+fn find_codex_exe_path_windows() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        candidates.push(
+            PathBuf::from(local_app_data)
+                .join("Programs")
+                .join("Codex")
+                .join("Codex.exe"),
+        );
+    }
+    if let Some(program_files) = std::env::var_os("ProgramFiles") {
+        candidates.push(
+            PathBuf::from(&program_files)
+                .join("Codex")
+                .join("Codex.exe"),
+        );
+        candidates.push(
+            PathBuf::from(program_files)
+                .join("Programs")
+                .join("Codex")
+                .join("Codex.exe"),
+        );
+    }
+    if let Some(program_files_x86) = std::env::var_os("ProgramFiles(x86)") {
+        candidates.push(
+            PathBuf::from(program_files_x86)
+                .join("Codex")
+                .join("Codex.exe"),
+        );
+    }
+    candidates.into_iter().find(|path| path.exists())
 }
 
 pub async fn fetch_provider_models_impl(provider: ProviderConfig) -> Result<Vec<ModelOption>> {

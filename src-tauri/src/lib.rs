@@ -8,8 +8,8 @@ use services::{
     },
     codex::{
         delete_provider_impl, fetch_provider_models_impl, get_provider_impl, get_summary_impl,
-        get_usage_summary_impl, list_providers_impl, save_provider_impl, switch_provider_impl,
-        unify_thread_provider_impl,
+        get_usage_summary_impl, list_providers_impl, restart_codex_app_impl, save_provider_impl,
+        switch_provider_impl, unify_thread_provider_impl,
     },
     webdav::{
         load_webdav_config_impl, pull_threads_impl, push_threads_impl, save_webdav_config_impl,
@@ -149,6 +149,14 @@ async fn switch_provider(provider_id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn restart_codex_app() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(restart_codex_app_impl)
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 async fn fetch_provider_models(
     provider: services::codex::ProviderConfig,
 ) -> Result<Vec<services::codex::ModelOption>, String> {
@@ -258,6 +266,7 @@ fn handle_tray_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     if let Some(provider_id) = id.strip_prefix(TRAY_PROVIDER_PREFIX) {
         if switch_provider_impl(provider_id).is_ok() {
             let _ = unify_thread_provider_impl();
+            let _ = restart_codex_app_impl();
         }
         let _ = refresh_tray_menu(app);
         notify_frontend_refresh(app);
@@ -313,6 +322,7 @@ pub fn run() {
             save_provider,
             delete_provider,
             switch_provider,
+            restart_codex_app,
             fetch_provider_models,
             unify_thread_provider,
             load_webdav_config,

@@ -568,7 +568,8 @@ function App() {
     await runScoped("provider", `切换 Provider 到 ${providerId}`, async () => {
       await invoke("switch_provider", { providerId });
       const result = await invoke<string>("unify_thread_provider");
-      return `Provider 已切换到 ${providerId}，${result}`;
+      const restartMessage = await invoke<string>("restart_codex_app");
+      return `Provider 已切换到 ${providerId}，${result}，${restartMessage}`;
     });
   }
 
