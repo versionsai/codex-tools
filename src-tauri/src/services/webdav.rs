@@ -111,7 +111,11 @@ pub async fn push_threads_impl() -> Result<String> {
     let mut relocated = 0usize;
     let mut ensured_remote_dirs = HashSet::new();
     for entry in remote_entries.values().filter(|entry| !entry.is_directory) {
-        if let Some(parent) = entry.relative_path.rsplit_once('/').map(|(parent, _)| parent) {
+        if let Some(parent) = entry
+            .relative_path
+            .rsplit_once('/')
+            .map(|(parent, _)| parent)
+        {
             ensured_remote_dirs.insert(parent.to_string());
         }
     }
@@ -123,7 +127,9 @@ pub async fn push_threads_impl() -> Result<String> {
             .cloned()
             .or_else(|| manifest_path_by_thread_id(&remote_manifest, &thread.thread_id));
         let remote_path = thread.relative_path.clone();
-        if existing_remote_path.as_deref().is_some_and(|path| path != remote_path)
+        if existing_remote_path
+            .as_deref()
+            .is_some_and(|path| path != remote_path)
             && existing_remote_path
                 .as_deref()
                 .is_some_and(|path| remote_entries.contains_key(path))
@@ -136,7 +142,10 @@ pub async fn push_threads_impl() -> Result<String> {
             .and_then(|remote| {
                 let local_mtime = thread.modified_at?;
                 let remote_mtime = remote.last_modified?;
-                Some(remote_mtime.timestamp() >= system_time_secs(local_mtime) && remote.size == thread.size)
+                Some(
+                    remote_mtime.timestamp() >= system_time_secs(local_mtime)
+                        && remote.size == thread.size,
+                )
             })
             .unwrap_or(false);
         if should_skip {
@@ -151,7 +160,13 @@ pub async fn push_threads_impl() -> Result<String> {
             &mut ensured_remote_dirs,
         )
         .await?;
-        put_remote_file(&client, &base_url, &remote_path, fs::read(&thread.local_path)?).await?;
+        put_remote_file(
+            &client,
+            &base_url,
+            &remote_path,
+            fs::read(&thread.local_path)?,
+        )
+        .await?;
         uploaded += 1;
     }
 
@@ -201,10 +216,14 @@ pub async fn pull_threads_impl() -> Result<String> {
 
         let local_path = codex.join(path_from_relative(&target_rel));
         let should_skip = if local_path.exists() {
-            let local_modified = fs::metadata(&local_path).ok().and_then(|meta| meta.modified().ok());
+            let local_modified = fs::metadata(&local_path)
+                .ok()
+                .and_then(|meta| meta.modified().ok());
             remote_entries
                 .get(&remote.relative_path)
-                .and_then(|entry| Some(entry.last_modified?.timestamp() <= system_time_secs(local_modified?)))
+                .and_then(|entry| {
+                    Some(entry.last_modified?.timestamp() <= system_time_secs(local_modified?))
+                })
                 .unwrap_or(false)
         } else {
             false
@@ -300,7 +319,10 @@ fn local_thread_map(codex: &Path) -> Result<HashMap<String, ThreadRecord>> {
                 modified_at: metadata.as_ref().and_then(|meta| meta.modified().ok()),
                 size: metadata.map(|meta| meta.len()),
             };
-            threads.insert(identity_key(&record.project_name, &record.thread_id), record);
+            threads.insert(
+                identity_key(&record.project_name, &record.thread_id),
+                record,
+            );
         }
     }
     Ok(threads)
@@ -345,7 +367,12 @@ fn merge_local_threads_into_manifest<'a>(
     let mut map: HashMap<String, ManifestThread> = manifest
         .threads
         .drain(..)
-        .map(|thread| (identity_key(&thread.project_name, &thread.thread_id), thread))
+        .map(|thread| {
+            (
+                identity_key(&thread.project_name, &thread.thread_id),
+                thread,
+            )
+        })
         .collect();
     for thread in local_threads {
         map.retain(|_, existing| existing.thread_id != thread.thread_id);
@@ -426,13 +453,19 @@ async fn load_remote_manifest(client: &Client, base_url: &str) -> Result<SyncMan
                     })
                     .collect(),
             };
-            manifest.threads.sort_by(|left, right| left.thread_id.cmp(&right.thread_id));
+            manifest
+                .threads
+                .sort_by(|left, right| left.thread_id.cmp(&right.thread_id));
             Ok(manifest)
         }
     }
 }
 
-async fn save_remote_manifest(client: &Client, base_url: &str, manifest: &SyncManifest) -> Result<()> {
+async fn save_remote_manifest(
+    client: &Client,
+    base_url: &str,
+    manifest: &SyncManifest,
+) -> Result<()> {
     put_remote_file(
         client,
         base_url,
@@ -468,7 +501,11 @@ async fn ensure_remote_roots(client: &Client, base_url: &str) -> Result<()> {
     Ok(())
 }
 
-async fn list_remote_tree(client: &Client, base_url: &str, relative_root: &str) -> Result<Vec<RemoteEntry>> {
+async fn list_remote_tree(
+    client: &Client,
+    base_url: &str,
+    relative_root: &str,
+) -> Result<Vec<RemoteEntry>> {
     let mut results = Vec::new();
     let mut stack = vec![relative_root.to_string()];
     while let Some(current) = stack.pop() {
@@ -483,7 +520,11 @@ async fn list_remote_tree(client: &Client, base_url: &str, relative_root: &str) 
     Ok(results)
 }
 
-async fn stat_remote_file(client: &Client, base_url: &str, relative_path: &str) -> Result<RemoteEntry> {
+async fn stat_remote_file(
+    client: &Client,
+    base_url: &str,
+    relative_path: &str,
+) -> Result<RemoteEntry> {
     let xml = propfind(client, base_url, relative_path, "0").await?;
     parse_multistatus(base_url, &xml, "")?
         .into_iter()
@@ -491,7 +532,12 @@ async fn stat_remote_file(client: &Client, base_url: &str, relative_path: &str) 
         .ok_or_else(|| anyhow!("远端文件不存在：{}", relative_path))
 }
 
-async fn propfind(client: &Client, base_url: &str, relative_path: &str, depth: &str) -> Result<String> {
+async fn propfind(
+    client: &Client,
+    base_url: &str,
+    relative_path: &str,
+    depth: &str,
+) -> Result<String> {
     let body = r#"<?xml version="1.0" encoding="utf-8" ?>
 <d:propfind xmlns:d="DAV:">
   <d:prop>
@@ -500,12 +546,17 @@ async fn propfind(client: &Client, base_url: &str, relative_path: &str, depth: &
     <d:getlastmodified />
   </d:prop>
 </d:propfind>"#;
-    let response = authed_request(client, Method::from_bytes(b"PROPFIND")?, base_url, relative_path)?
-        .header("Depth", depth)
-        .header("Content-Type", "application/xml; charset=utf-8")
-        .body(body.to_string())
-        .send()
-        .await?;
+    let response = authed_request(
+        client,
+        Method::from_bytes(b"PROPFIND")?,
+        base_url,
+        relative_path,
+    )?
+    .header("Depth", depth)
+    .header("Content-Type", "application/xml; charset=utf-8")
+    .body(body.to_string())
+    .send()
+    .await?;
     let status = response.status();
     if !matches!(status, StatusCode::MULTI_STATUS | StatusCode::OK) {
         return Err(anyhow!("WebDAV PROPFIND 失败：HTTP {}", status.as_u16()));
@@ -513,7 +564,11 @@ async fn propfind(client: &Client, base_url: &str, relative_path: &str, depth: &
     Ok(response.text().await?)
 }
 
-async fn ensure_remote_directory(client: &Client, base_url: &str, relative_dir: &str) -> Result<()> {
+async fn ensure_remote_directory(
+    client: &Client,
+    base_url: &str,
+    relative_dir: &str,
+) -> Result<()> {
     let normalized = relative_dir.trim_matches('/');
     if normalized.is_empty() || normalized == "." {
         return Ok(());
@@ -525,14 +580,26 @@ async fn ensure_remote_directory(client: &Client, base_url: &str, relative_dir: 
         } else {
             format!("{}/{}", current, part)
         };
-        let response = authed_request(client, Method::from_bytes(b"MKCOL")?, base_url, &(current.clone() + "/"))?
-            .send()
-            .await?;
+        let response = authed_request(
+            client,
+            Method::from_bytes(b"MKCOL")?,
+            base_url,
+            &(current.clone() + "/"),
+        )?
+        .send()
+        .await?;
         if !matches!(
             response.status(),
-            StatusCode::CREATED | StatusCode::METHOD_NOT_ALLOWED | StatusCode::MOVED_PERMANENTLY | StatusCode::OK
+            StatusCode::CREATED
+                | StatusCode::METHOD_NOT_ALLOWED
+                | StatusCode::MOVED_PERMANENTLY
+                | StatusCode::OK
         ) {
-            return Err(anyhow!("创建远端目录失败：{} HTTP {}", current, response.status().as_u16()));
+            return Err(anyhow!(
+                "创建远端目录失败：{} HTTP {}",
+                current,
+                response.status().as_u16()
+            ));
         }
     }
     Ok(())
@@ -570,13 +637,25 @@ async fn ensure_remote_directory_cached(
     Ok(())
 }
 
-async fn put_remote_file(client: &Client, base_url: &str, relative_path: &str, data: Vec<u8>) -> Result<()> {
+async fn put_remote_file(
+    client: &Client,
+    base_url: &str,
+    relative_path: &str,
+    data: Vec<u8>,
+) -> Result<()> {
     let response = authed_request(client, Method::PUT, base_url, relative_path)?
         .body(data)
         .send()
         .await?;
-    if !matches!(response.status(), StatusCode::OK | StatusCode::CREATED | StatusCode::NO_CONTENT) {
-        return Err(anyhow!("上传远端文件失败：{} HTTP {}", relative_path, response.status().as_u16()));
+    if !matches!(
+        response.status(),
+        StatusCode::OK | StatusCode::CREATED | StatusCode::NO_CONTENT
+    ) {
+        return Err(anyhow!(
+            "上传远端文件失败：{} HTTP {}",
+            relative_path,
+            response.status().as_u16()
+        ));
     }
     Ok(())
 }
@@ -587,7 +666,11 @@ async fn get_remote_file(client: &Client, base_url: &str, relative_path: &str) -
         .await?;
     let status = response.status();
     if status != StatusCode::OK {
-        return Err(anyhow!("下载远端文件失败：{} HTTP {}", relative_path, status.as_u16()));
+        return Err(anyhow!(
+            "下载远端文件失败：{} HTTP {}",
+            relative_path,
+            status.as_u16()
+        ));
     }
     Ok(response.bytes().await?.to_vec())
 }
@@ -695,7 +778,11 @@ fn collect_responses(value: &Value, callback: &mut impl FnMut(&Value)) {
     }
 }
 
-fn remote_entry_from_response(response: &Value, base_path: &str, target_relative: &str) -> Option<RemoteEntry> {
+fn remote_entry_from_response(
+    response: &Value,
+    base_path: &str,
+    target_relative: &str,
+) -> Option<RemoteEntry> {
     let href = response.get("href").and_then(Value::as_str)?;
     let href_path = reqwest::Url::parse(href)
         .map(|url| url.path().to_string())
@@ -731,7 +818,10 @@ fn remote_entry_from_response(response: &Value, base_path: &str, target_relative
 }
 
 fn first_value(value: &Value) -> &Value {
-    value.as_array().and_then(|items| items.first()).unwrap_or(value)
+    value
+        .as_array()
+        .and_then(|items| items.first())
+        .unwrap_or(value)
 }
 
 fn join_url(base_url: &str, relative_path: &str) -> Result<String> {
@@ -802,7 +892,10 @@ fn path_from_relative(relative_path: &str) -> PathBuf {
 }
 
 fn parent_relative(relative_path: &str) -> &str {
-    relative_path.rsplit_once('/').map(|(parent, _)| parent).unwrap_or("")
+    relative_path
+        .rsplit_once('/')
+        .map(|(parent, _)| parent)
+        .unwrap_or("")
 }
 
 fn system_time_secs(time: std::time::SystemTime) -> i64 {

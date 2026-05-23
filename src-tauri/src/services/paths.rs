@@ -32,6 +32,51 @@ pub fn webdav_config_path() -> Result<PathBuf> {
     Ok(codex_dir()?.join("webdav_sync_config.json"))
 }
 
+pub fn cc_connect_dir() -> Result<PathBuf> {
+    Ok(app_config_dir()?.join("wechatbot"))
+}
+
+pub fn cc_connect_config_path() -> Result<PathBuf> {
+    Ok(cc_connect_dir()?.join("config.toml"))
+}
+
+pub fn bridge_qr_image_path() -> Result<PathBuf> {
+    Ok(cc_connect_dir()?.join("qr").join("weixin-qr.png"))
+}
+
+pub fn managed_cc_connect_dir() -> Result<PathBuf> {
+    Ok(cc_connect_dir()?.join("runtime"))
+}
+
+pub fn managed_cc_connect_bin_dir() -> Result<PathBuf> {
+    Ok(managed_cc_connect_dir()?.join("bin"))
+}
+
+pub fn managed_cc_connect_binary_path() -> Result<PathBuf> {
+    let binary = if cfg!(target_os = "windows") {
+        "cc-connect.exe"
+    } else {
+        "cc-connect"
+    };
+    Ok(managed_cc_connect_bin_dir()?.join(binary))
+}
+
+pub fn managed_cc_connect_bridge_pid_path() -> Result<PathBuf> {
+    Ok(managed_cc_connect_dir()?.join("bridge.pid"))
+}
+
+pub fn managed_cc_connect_setup_pid_path() -> Result<PathBuf> {
+    Ok(managed_cc_connect_dir()?.join("setup.pid"))
+}
+
+pub fn managed_cc_connect_bridge_log_path() -> Result<PathBuf> {
+    Ok(managed_cc_connect_dir()?.join("bridge.log"))
+}
+
+pub fn managed_cc_connect_setup_log_path() -> Result<PathBuf> {
+    Ok(managed_cc_connect_dir()?.join("setup.log"))
+}
+
 fn get_home_dir() -> PathBuf {
     if let Some(home) = dirs::home_dir() {
         return home;

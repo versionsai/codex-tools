@@ -1,4 +1,6 @@
-use super::paths::{app_config_dir, auth_json_path, codex_dir, config_toml_path, providers_config_path};
+use super::paths::{
+    app_config_dir, auth_json_path, codex_dir, config_toml_path, providers_config_path,
+};
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Local};
 use rusqlite::Connection;
@@ -117,7 +119,10 @@ pub fn get_usage_summary_impl() -> Result<UsageSummary> {
             let Ok(value) = serde_json::from_str::<Value>(line) else {
                 continue;
             };
-            if let Some(provider) = value.pointer("/payload/model_provider").and_then(Value::as_str) {
+            if let Some(provider) = value
+                .pointer("/payload/model_provider")
+                .and_then(Value::as_str)
+            {
                 current_provider = provider.to_string();
             }
             if let Some(model) = model_from_value(&value) {
@@ -128,16 +133,15 @@ pub fn get_usage_summary_impl() -> Result<UsageSummary> {
             }
             let info = value.pointer("/payload/info");
             let last_usage = usage_from_value(info.and_then(|info| info.get("last_token_usage")));
-            let current_total = usage_from_value(info.and_then(|info| info.get("total_token_usage")));
+            let current_total =
+                usage_from_value(info.and_then(|info| info.get("total_token_usage")));
             let Some(delta) = last_usage.or_else(|| {
-                current_total
-                    .as_ref()
-                    .map(|current| {
-                        previous_total
-                            .as_ref()
-                            .map(|last| current.saturating_delta(last))
-                            .unwrap_or_else(|| current.clone())
-                    })
+                current_total.as_ref().map(|current| {
+                    previous_total
+                        .as_ref()
+                        .map(|last| current.saturating_delta(last))
+                        .unwrap_or_else(|| current.clone())
+                })
             }) else {
                 continue;
             };
@@ -157,7 +161,11 @@ pub fn get_usage_summary_impl() -> Result<UsageSummary> {
                 .and_then(model_from_info)
                 .or_else(|| current_model.clone())
                 .unwrap_or_else(|| "gpt-5".to_string());
-            let event_key = usage_event_key(value.get("timestamp").and_then(Value::as_str), &model, &delta);
+            let event_key = usage_event_key(
+                value.get("timestamp").and_then(Value::as_str),
+                &model,
+                &delta,
+            );
             if !seen_events.insert(event_key) {
                 continue;
             }
@@ -182,16 +190,18 @@ pub fn get_usage_summary_impl() -> Result<UsageSummary> {
             daily.total_tokens += delta.total_tokens;
             daily.cost_usd += cost_usd;
             daily.events += 1;
-            let provider = providers.entry(current_provider.clone()).or_insert_with(|| ProviderUsage {
-                provider: current_provider.clone(),
-                input_tokens: 0,
-                cached_input_tokens: 0,
-                output_tokens: 0,
-                reasoning_output_tokens: 0,
-                total_tokens: 0,
-                cost_usd: 0.0,
-                events: 0,
-            });
+            let provider = providers
+                .entry(current_provider.clone())
+                .or_insert_with(|| ProviderUsage {
+                    provider: current_provider.clone(),
+                    input_tokens: 0,
+                    cached_input_tokens: 0,
+                    output_tokens: 0,
+                    reasoning_output_tokens: 0,
+                    total_tokens: 0,
+                    cost_usd: 0.0,
+                    events: 0,
+                });
             provider.input_tokens += delta.input_tokens;
             provider.cached_input_tokens += delta.cached_input_tokens;
             provider.output_tokens += delta.output_tokens;
@@ -221,7 +231,12 @@ pub fn list_providers_impl() -> Result<Vec<ProviderConfig>> {
     let current = current_provider().unwrap_or_else(|_| "openai".to_string());
     let mut store = read_provider_store()?;
     ensure_builtin_openai(&mut store.providers);
-    if current != "openai" && !store.providers.iter().any(|provider| provider.id == current) {
+    if current != "openai"
+        && !store
+            .providers
+            .iter()
+            .any(|provider| provider.id == current)
+    {
         store.providers.insert(1, default_api_key_provider(current));
     }
     capture_current_live_config(&mut store.providers)?;
@@ -254,7 +269,9 @@ impl TokenUsage {
             input_tokens: (self.input_tokens - previous.input_tokens).max(0),
             cached_input_tokens: (self.cached_input_tokens - previous.cached_input_tokens).max(0),
             output_tokens: (self.output_tokens - previous.output_tokens).max(0),
-            reasoning_output_tokens: (self.reasoning_output_tokens - previous.reasoning_output_tokens).max(0),
+            reasoning_output_tokens: (self.reasoning_output_tokens
+                - previous.reasoning_output_tokens)
+                .max(0),
             total_tokens: (self.total_tokens - previous.total_tokens).max(0),
         }
     }
@@ -279,18 +296,27 @@ impl TokenUsage {
 fn usage_from_value(value: Option<&Value>) -> Option<TokenUsage> {
     let value = value?;
     Some(TokenUsage {
-        input_tokens: value.get("input_tokens").and_then(Value::as_i64).unwrap_or_default(),
+        input_tokens: value
+            .get("input_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
         cached_input_tokens: value
             .get("cached_input_tokens")
             .or_else(|| value.get("cache_read_input_tokens"))
             .and_then(Value::as_i64)
             .unwrap_or_default(),
-        output_tokens: value.get("output_tokens").and_then(Value::as_i64).unwrap_or_default(),
+        output_tokens: value
+            .get("output_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
         reasoning_output_tokens: value
             .get("reasoning_output_tokens")
             .and_then(Value::as_i64)
             .unwrap_or_default(),
-        total_tokens: value.get("total_tokens").and_then(Value::as_i64).unwrap_or_default(),
+        total_tokens: value
+            .get("total_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
     })
 }
 
@@ -300,7 +326,11 @@ fn model_from_value(value: &Value) -> Option<String> {
         .and_then(model_from_info)
         .or_else(|| value.pointer("/payload/model").and_then(value_string))
         .or_else(|| value.pointer("/payload/model_name").and_then(value_string))
-        .or_else(|| value.pointer("/payload/metadata/model").and_then(value_string))
+        .or_else(|| {
+            value
+                .pointer("/payload/metadata/model")
+                .and_then(value_string)
+        })
 }
 
 fn model_from_info(info: &Value) -> Option<String> {
@@ -311,7 +341,11 @@ fn model_from_info(info: &Value) -> Option<String> {
 }
 
 fn value_string(value: &Value) -> Option<String> {
-    value.as_str().map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned)
+    value
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn usage_event_key(timestamp: Option<&str>, model: &str, usage: &TokenUsage) -> String {
@@ -418,9 +452,15 @@ fn pricing_for_model(model: &str) -> Option<ModelPricing> {
 pub fn get_provider_impl(provider_id: &str) -> Result<ProviderConfig> {
     validate_provider_id(provider_id)?;
     let mut store = read_provider_store()?;
-    if !store.providers.iter().any(|provider| provider.id == provider_id) {
+    if !store
+        .providers
+        .iter()
+        .any(|provider| provider.id == provider_id)
+    {
         if provider_id == "openai" {
-            store.providers.insert(0, default_openai_provider("openai".to_string()));
+            store
+                .providers
+                .insert(0, default_openai_provider("openai".to_string()));
         } else {
             return Err(anyhow!("Provider 不存在：{}", provider_id));
         }
@@ -429,7 +469,9 @@ pub fn get_provider_impl(provider_id: &str) -> Result<ProviderConfig> {
         capture_current_live_config(&mut store.providers)?;
     }
     for provider in &mut store.providers {
-        if provider.id == provider_id && (provider.auth_json.is_none() || provider.config_toml.is_none()) {
+        if provider.id == provider_id
+            && (provider.auth_json.is_none() || provider.config_toml.is_none())
+        {
             *provider = with_live_files(provider.clone())?;
         }
     }
@@ -451,12 +493,18 @@ pub fn save_provider_impl(provider: ProviderConfig) -> Result<()> {
     let mut provider = sanitize_provider(provider);
     if let Some(existing) = store.providers.iter().find(|item| item.id == provider.id) {
         provider.auth_json = provider.auth_json.or_else(|| existing.auth_json.clone());
-        provider.config_toml = provider.config_toml.or_else(|| existing.config_toml.clone());
+        provider.config_toml = provider
+            .config_toml
+            .or_else(|| existing.config_toml.clone());
     }
     let provider = with_live_files(provider)?;
     let provider_id = provider.id.clone();
     let is_current = current_provider().is_ok_and(|current| current == provider_id);
-    if let Some(existing) = store.providers.iter_mut().find(|item| item.id == provider_id) {
+    if let Some(existing) = store
+        .providers
+        .iter_mut()
+        .find(|item| item.id == provider_id)
+    {
         let next = provider.clone();
         *existing = next;
     } else {
@@ -479,7 +527,9 @@ pub fn delete_provider_impl(provider_id: &str) -> Result<()> {
         return Err(anyhow!("不能删除当前正在使用的 Provider：{}", provider_id));
     }
     let mut store = read_provider_store()?;
-    store.providers.retain(|provider| provider.id != provider_id);
+    store
+        .providers
+        .retain(|provider| provider.id != provider_id);
     write_provider_store(&store)
 }
 
@@ -508,14 +558,23 @@ pub async fn fetch_provider_models_impl(provider: ProviderConfig) -> Result<Vec<
     let endpoint = format!("{}/models", base_url.trim_end_matches('/'));
     let client = reqwest::Client::new();
     let mut request = client.get(endpoint).header("accept", "application/json");
-    if let Some(api_key) = provider.api_key.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(api_key) = provider
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         request = request.bearer_auth(api_key);
     }
     let response = request.send().await?;
     let status = response.status();
     let payload = response.text().await?;
     if !status.is_success() {
-        return Err(anyhow!("获取模型失败：HTTP {} {}", status.as_u16(), payload));
+        return Err(anyhow!(
+            "获取模型失败：HTTP {} {}",
+            status.as_u16(),
+            payload
+        ));
     }
     let value: Value = serde_json::from_str(&payload)?;
     let data = value
@@ -600,7 +659,10 @@ fn current_provider_from_document(document: &DocumentMut) -> Option<String> {
 }
 
 fn set_optional_document_string(document: &mut DocumentMut, key: &str, input: Option<String>) {
-    if let Some(value_text) = input.map(|text| text.trim().to_string()).filter(|text| !text.is_empty()) {
+    if let Some(value_text) = input
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+    {
         document[key] = value(value_text);
     }
 }
@@ -640,7 +702,10 @@ fn read_provider_store() -> Result<ProviderStore> {
 
 fn write_provider_store(store: &ProviderStore) -> Result<()> {
     fs::create_dir_all(app_config_dir()?)?;
-    fs::write(providers_config_path()?, serde_json::to_string_pretty(store)?)?;
+    fs::write(
+        providers_config_path()?,
+        serde_json::to_string_pretty(store)?,
+    )?;
     Ok(())
 }
 
@@ -648,8 +713,9 @@ fn sanitize_provider(provider: ProviderConfig) -> ProviderConfig {
     if provider.id == "openai" {
         let mut builtin = default_openai_provider("openai".to_string());
         builtin.model = provider.model.or(builtin.model);
-        builtin.model_reasoning_effort =
-            provider.model_reasoning_effort.or(builtin.model_reasoning_effort);
+        builtin.model_reasoning_effort = provider
+            .model_reasoning_effort
+            .or(builtin.model_reasoning_effort);
         builtin.auth_json = provider.auth_json;
         builtin.config_toml = provider.config_toml;
         return builtin;
@@ -686,7 +752,10 @@ fn default_api_key_provider(id: String) -> ProviderConfig {
 }
 
 fn ensure_builtin_openai(providers: &mut Vec<ProviderConfig>) {
-    let Some(index) = providers.iter().position(|provider| provider.id == "openai") else {
+    let Some(index) = providers
+        .iter()
+        .position(|provider| provider.id == "openai")
+    else {
         providers.insert(0, default_openai_provider("openai".to_string()));
         return;
     };
@@ -709,10 +778,12 @@ fn with_live_files(mut provider: ProviderConfig) -> Result<ProviderConfig> {
             .clone()
             .filter(is_chatgpt_auth_json)
             .or_else(read_current_chatgpt_auth_json)
-            .unwrap_or_else(|| serde_json::json!({
-                "auth_mode": "chatgpt",
-                "OPENAI_API_KEY": null
-            })),
+            .unwrap_or_else(|| {
+                serde_json::json!({
+                    "auth_mode": "chatgpt",
+                    "OPENAI_API_KEY": null
+                })
+            }),
         _ => serde_json::json!({
             "OPENAI_API_KEY": provider.api_key.as_deref().unwrap_or_default()
         }),
@@ -832,9 +903,11 @@ fn build_official_config(provider: &ProviderConfig) -> Result<String> {
         .clone()
         .or_else(read_current_official_config)
         .unwrap_or_else(default_official_config);
-    let mut document = source
-        .parse::<DocumentMut>()
-        .unwrap_or_else(|_| default_official_config().parse::<DocumentMut>().expect("valid default official config"));
+    let mut document = source.parse::<DocumentMut>().unwrap_or_else(|_| {
+        default_official_config()
+            .parse::<DocumentMut>()
+            .expect("valid default official config")
+    });
     document.as_table_mut().remove("model_providers");
     document["model_provider"] = value("openai");
     set_optional_document_string(&mut document, "model", provider.model.clone());
@@ -857,10 +930,17 @@ fn build_api_key_config(provider: &ProviderConfig) -> Result<String> {
     let wire_api = provider.wire_api.as_deref().unwrap_or("responses").trim();
     let mut output = String::new();
     output.push_str(&format!("model_provider = \"{}\"\n", toml_escape(id)));
-    output.push_str(&format!("model = \"{}\"\n", toml_escape(if model.is_empty() { "gpt-5.4" } else { model })));
+    output.push_str(&format!(
+        "model = \"{}\"\n",
+        toml_escape(if model.is_empty() { "gpt-5.4" } else { model })
+    ));
     output.push_str(&format!(
         "model_reasoning_effort = \"{}\"\n",
-        toml_escape(if reasoning.is_empty() { "high" } else { reasoning })
+        toml_escape(if reasoning.is_empty() {
+            "high"
+        } else {
+            reasoning
+        })
     ));
     output.push_str("disable_response_storage = true\n\n");
     output.push_str("[model_providers]\n");
@@ -868,7 +948,11 @@ fn build_api_key_config(provider: &ProviderConfig) -> Result<String> {
     output.push_str(&format!("name = \"{}\"\n", toml_escape(id)));
     output.push_str(&format!(
         "wire_api = \"{}\"\n",
-        toml_escape(if wire_api.is_empty() { "responses" } else { wire_api })
+        toml_escape(if wire_api.is_empty() {
+            "responses"
+        } else {
+            wire_api
+        })
     ));
     output.push_str("requires_openai_auth = true\n");
     if let Some(base_url) = provider
@@ -990,7 +1074,10 @@ fn replace_provider_in_jsonl(content: &str, provider: &str) -> (String, bool) {
                 .and_then(Value::as_str)
                 .is_none_or(|current| current != provider)
             {
-                payload.insert("model_provider".to_string(), Value::String(provider.to_string()));
+                payload.insert(
+                    "model_provider".to_string(),
+                    Value::String(provider.to_string()),
+                );
                 changed = true;
             }
         }

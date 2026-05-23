@@ -1,10 +1,10 @@
 # Codex Tools
 
-`Codex Tools` 是给 Codex 用的 Provider 管理和线程同步工具。
+`Codex Tools` 是一个围绕 Codex 的本地工具链壳子。
 
-它解决的问题很具体：当你在官方 ChatGPT 登录和第三方 API Key Provider 之间来回切换时，Codex 的配置、登录状态和历史线程很容易变得不一致。这个工具把 Provider 配置保存下来，切换时自动写回 Codex，并顺手把本地线程里的 Provider 也合并好。
+当前它先聚焦几件高频事情：Provider 管理、线程同步、离线用量统计、微信连接控制。UI 只是统一入口，具体能力按模块扩展，后面还可以继续接更多工具。
 
-它不是通用 AI CLI 管理器，也不准备去管 Claude Code、Gemini CLI 或其他工具。这里先把 Codex 这一件事做好。
+它不是要替代 Codex 本身，而是把 Codex 周边零散操作收进一个桌面控制面里，尽量做到一个 App 统一处理。
 
 ## 下载
 
@@ -42,16 +42,15 @@ macOS 下 Provider 切换、Codex 配置写入、线程 Provider 合并、状态
 
 Windows 现在只是能通过 GitHub Actions 编译出 `.exe` / `.msi` 安装包，还没有在真实 Windows 机器上完整验证 Provider 切换、Codex 配置写入、线程归并和托盘行为。所以 Windows 制品先当作实验性版本看待，不建议直接拿来放重要环境里用。
 
-## 功能
+## 当前内置模块
 
-- 管理多个 Codex Provider。
-- 固定保留官方 `openai` Provider，用来对应 Codex 官方 ChatGPT 登录模式。
-- 为第三方 API Key Provider 保存独立配置。
-- 切换 Provider 时写入 `~/.codex/config.toml` 和 `~/.codex/auth.json`。
-- 切换后自动合并本地线程 Provider。
-- 查看 Codex 本地用量统计，按日期和 Provider 汇总 token 与预估 Cost。
-- 通过 WebDAV 推送和拉取 Codex 线程文件。
-- macOS 下常驻状态栏，可以从状态栏菜单直接切 Provider。
+- Provider 管理：保存多个 Codex Provider，切换后自动写回 Codex 配置，并顺手统一本地线程里的 Provider。
+- 用量统计：离线统计本地 `sessions` JSONL 中的 token，用日期和 Provider 两个维度展示总量与预估 Cost。
+- 微信连接：Codex Tools 内置微信连接引擎，负责项目选择、扫码登录、服务启动和通信状态展示。
+- WebDAV 同步：推送和拉取 Codex 线程文件，支持 `sessions`、`archived_sessions` 与 `session_index.jsonl`。
+- 状态栏入口：macOS 下常驻菜单栏，可直接切换 Provider、打开主窗口、刷新列表。
+
+现在的首页会优先展示这些工具模块，Provider 列表作为工作台的一部分保留在同一入口里。这一层结构就是后续继续接新工具的基础。
 
 ## 用量统计
 
@@ -72,6 +71,33 @@ npx ccusage@latest codex daily --config /tmp/no-such-ccusage.json --offline
 - Cost 按 OpenAI 官方模型价格估算，用来统一比较不同 Provider 下的消耗。
 
 这个页面只做本地离线统计，不会上传日志，也不会调用远端接口查询用量。
+
+## 微信连接（实验性）
+
+当前版本参考 `cc-connect` 对 Weixin ilink、项目配置、会话数据目录和 Codex agent 的连接方式，把微信连接能力收进 Codex Tools 自己的应用数据目录，由应用托管连接引擎、项目配置、扫码登录和服务启动。
+
+这页目前支持：
+
+- 自动准备内置微信连接引擎
+- 从 Codex 桌面端记录中读取已配置项目，并以纵向列表展示
+- 点击项目后自动保存为当前微信连接目标
+- 自动生成微信二维码，扫码成功后自动启动微信服务
+- 展示微信登录、微信服务和通信会话状态
+- 只保留一个当前连接项目，避免历史项目影响微信通信
+- 支持只读、可编辑、完全自动三种 Codex 权限模式，并写入当前微信连接项目配置
+
+这版的边界也很明确：
+
+- Codex Tools 负责应用层体验、配置目录、项目切换和服务生命周期
+- 内置微信连接引擎沿用 `cc-connect` 的底层连接思路，负责微信消息接入和 Codex agent 运行
+
+微信连接数据目录位于：
+
+```text
+~/Library/Application Support/codex-tools/wechatbot
+```
+
+这里会保存微信连接配置、二维码、运行日志和运行时文件。Codex Tools 不再读取或写入 `~/.cc-connect`。
 
 ## Provider 是怎么处理的
 

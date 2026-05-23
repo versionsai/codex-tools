@@ -1,6 +1,11 @@
 mod services;
 
 use services::{
+    bridge::{
+        get_bridge_status_impl, install_cc_connect_impl, open_cc_connect_terminal_impl,
+        open_wechat_setup_terminal_impl, pick_work_dir_impl, run_daemon_command_impl,
+        save_bridge_project_impl,
+    },
     codex::{
         delete_provider_impl, fetch_provider_models_impl, get_provider_impl, get_summary_impl,
         get_usage_summary_impl, list_providers_impl, save_provider_impl, switch_provider_impl,
@@ -27,40 +32,119 @@ const TRAY_PROVIDER_PREFIX: &str = "tray:provider:";
 const FRONTEND_REFRESH_EVENT: &str = "codex-tools-refresh";
 
 #[tauri::command]
-fn get_summary() -> Result<services::codex::Summary, String> {
-    get_summary_impl().map_err(|err| err.to_string())
+async fn get_summary() -> Result<services::codex::Summary, String> {
+    tauri::async_runtime::spawn_blocking(get_summary_impl)
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
-fn get_usage_summary() -> Result<services::codex::UsageSummary, String> {
-    get_usage_summary_impl().map_err(|err| err.to_string())
+async fn get_usage_summary() -> Result<services::codex::UsageSummary, String> {
+    tauri::async_runtime::spawn_blocking(get_usage_summary_impl)
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
-fn list_providers() -> Result<Vec<services::codex::ProviderConfig>, String> {
-    list_providers_impl().map_err(|err| err.to_string())
+async fn get_bridge_status() -> Result<services::bridge::BridgeStatus, String> {
+    tauri::async_runtime::spawn_blocking(get_bridge_status_impl)
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
-fn get_provider(provider_id: String) -> Result<services::codex::ProviderConfig, String> {
-    get_provider_impl(&provider_id).map_err(|err| err.to_string())
+async fn open_wechat_setup_terminal(project_name: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || open_wechat_setup_terminal_impl(&project_name))
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
-fn save_provider(provider: services::codex::ProviderConfig) -> Result<(), String> {
-    save_provider_impl(provider).map_err(|err| err.to_string())?;
+async fn open_cc_connect_terminal() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(open_cc_connect_terminal_impl)
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+async fn install_cc_connect() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(install_cc_connect_impl)
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+async fn run_bridge_daemon_command(action: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || run_daemon_command_impl(&action))
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+async fn save_bridge_project(
+    project: services::bridge::BridgeProjectDraft,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || save_bridge_project_impl(project))
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+async fn pick_work_dir() -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(pick_work_dir_impl)
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+async fn list_providers() -> Result<Vec<services::codex::ProviderConfig>, String> {
+    tauri::async_runtime::spawn_blocking(list_providers_impl)
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+async fn get_provider(provider_id: String) -> Result<services::codex::ProviderConfig, String> {
+    tauri::async_runtime::spawn_blocking(move || get_provider_impl(&provider_id))
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+async fn save_provider(provider: services::codex::ProviderConfig) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || save_provider_impl(provider))
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())?;
     refresh_tray_menu_for_app().map_err(|err| err.to_string())
 }
 
 #[tauri::command]
-fn delete_provider(provider_id: String) -> Result<(), String> {
-    delete_provider_impl(&provider_id).map_err(|err| err.to_string())?;
+async fn delete_provider(provider_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || delete_provider_impl(&provider_id))
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())?;
     refresh_tray_menu_for_app().map_err(|err| err.to_string())
 }
 
 #[tauri::command]
-fn switch_provider(provider_id: String) -> Result<(), String> {
-    switch_provider_impl(&provider_id).map_err(|err| err.to_string())?;
+async fn switch_provider(provider_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || switch_provider_impl(&provider_id))
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())?;
     refresh_tray_menu_for_app().map_err(|err| err.to_string())
 }
 
@@ -74,18 +158,27 @@ async fn fetch_provider_models(
 }
 
 #[tauri::command]
-fn unify_thread_provider() -> Result<String, String> {
-    unify_thread_provider_impl().map_err(|err| err.to_string())
+async fn unify_thread_provider() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(unify_thread_provider_impl)
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
-fn load_webdav_config() -> Result<WebDavConfig, String> {
-    load_webdav_config_impl().map_err(|err| err.to_string())
+async fn load_webdav_config() -> Result<WebDavConfig, String> {
+    tauri::async_runtime::spawn_blocking(load_webdav_config_impl)
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
-fn save_webdav_config(config: WebDavConfig) -> Result<(), String> {
-    save_webdav_config_impl(config).map_err(|err| err.to_string())
+async fn save_webdav_config(config: WebDavConfig) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || save_webdav_config_impl(config))
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -208,6 +301,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_summary,
             get_usage_summary,
+            get_bridge_status,
+            open_wechat_setup_terminal,
+            open_cc_connect_terminal,
+            install_cc_connect,
+            run_bridge_daemon_command,
+            save_bridge_project,
+            pick_work_dir,
             list_providers,
             get_provider,
             save_provider,

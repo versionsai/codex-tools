@@ -1,87 +1,23 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import {
-  Archive,
-  BarChart3,
-  CheckCircle2,
-  CloudDownload,
-  CloudUpload,
-  Cpu,
-  GitBranch,
-  Loader2,
-  Play,
-  Plus,
-  RefreshCw,
-  Save,
-  Settings2,
-  Shuffle,
-  TerminalSquare,
-  Trash2,
-} from "lucide-react";
+import { Archive, CloudDownload, CloudUpload, Cpu, Plus, RefreshCw, Shuffle } from "lucide-react";
+import { buildToolOverviewStates, getWorkspaceTools, type View } from "./modules/tool-registry";
+import type {
+  BridgeProjectDraft,
+  BridgeProjectStatus,
+  BridgeStatus,
+  CodexProjectStatus,
+  LogLine,
+  ProviderConfig,
+  Summary,
+  UsageSummary,
+  WebDavConfig,
+} from "./modules/app-types";
+import { LogsPage, UsagePage, WechatPage, WebdavPage } from "./modules/tool-pages";
+import { ProviderDashboardPage, ProviderFormPage } from "./modules/provider-pages";
 import "./styles.css";
-
-type Summary = {
-  provider: string;
-  active_sessions: number;
-  archived_sessions: number;
-  codex_dir: string;
-};
-
-type ProviderConfig = {
-  id: string;
-  name?: string;
-  auth_type?: string;
-  base_url?: string;
-  api_key?: string;
-  wire_api?: string;
-  model?: string;
-  model_reasoning_effort?: string;
-  requires_openai_auth?: boolean;
-};
-
-type WebDavConfig = {
-  base_url: string;
-  username: string;
-  password: string;
-  verify_tls: boolean;
-};
-
-type TokenUsage = {
-  input_tokens: number;
-  cached_input_tokens: number;
-  output_tokens: number;
-  reasoning_output_tokens: number;
-  total_tokens: number;
-};
-
-type DailyUsage = TokenUsage & {
-  date: string;
-  cost_usd: number;
-  events: number;
-};
-
-type ProviderUsage = TokenUsage & {
-  provider: string;
-  cost_usd: number;
-  events: number;
-};
-
-type UsageSummary = {
-  codex_dir: string;
-  days: DailyUsage[];
-  providers: ProviderUsage[];
-  total: TokenUsage;
-  total_cost_usd: number;
-  files_scanned: number;
-  usage_events: number;
-};
-
-type LogLine = {
-  id: number;
-  message: string;
-};
 
 type ToastState = {
   id: number;
@@ -89,7 +25,6 @@ type ToastState = {
   variant: "info" | "success" | "error";
 };
 
-type View = "providers" | "provider-form" | "usage" | "webdav" | "logs";
 type ModelOption = { id: string };
 
 const defaultSummary: Summary = {
@@ -139,6 +74,38 @@ const emptyUsage: UsageSummary = {
   usage_events: 0,
 };
 
+const emptyBridge: BridgeStatus = {
+  installed: false,
+  cc_connect_path: "",
+  version: "",
+  config_path: "",
+  config_exists: false,
+  daemon_status: "",
+  qr_image_path: "",
+  qr_image_exists: false,
+  qr_image_data_url: "",
+  service_running: false,
+  login_running: false,
+  suggested_project_name: "codex-tools-wechat",
+  suggested_snippet: "",
+  weixin_setup_command: "",
+  start_command: "",
+  has_logged_in_wechat_session: false,
+  communication_ready: false,
+  communication_hint: "",
+  projects: [],
+  codex_projects: [],
+};
+
+const emptyBridgeDraft: BridgeProjectDraft = {
+  name: "codex-tools-wechat",
+  work_dir: "",
+  allow_from: "*",
+  admin_from: "",
+  model: "gpt-5.5",
+  permission_mode: "plan",
+};
+
 function App() {
   const [summary, setSummary] = useState<Summary>(defaultSummary);
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
@@ -151,11 +118,21 @@ function App() {
     verify_tls: true,
   });
   const [usage, setUsage] = useState<UsageSummary>(emptyUsage);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [bridge, setBridge] = useState<BridgeStatus>(emptyBridge);
+  const [bridgeProjectName, setBridgeProjectName] = useState("codex-tools-wechat");
+  const [bridgeDraft, setBridgeDraft] = useState<BridgeProjectDraft>(emptyBridgeDraft);
+  const [syncBusy, setSyncBusy] = useState<string | null>(null);
+  const [providerBusy, setProviderBusy] = useState<string | null>(null);
+  const [bridgeBusy, setBridgeBusy] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogLine[]>([]);
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
+  const bridgeStatusRef = useRef<BridgeStatus>(emptyBridge);
+  const autoLoginProjectRef = useRef("");
+  const autoStartingBridgeRef = useRef(false);
+  const autoSetupBusyRef = useRef(false);
+  const autoQrRetryRef = useRef(false);
 
   useEffect(() => {
     void bootstrap();
@@ -181,15 +158,70 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (view !== "wechat") return;
+    void loadBridge(false);
+    const refreshOnFocus = () => {
+      void loadBridge(false);
+    };
+    window.addEventListener("focus", refreshOnFocus);
+    return () => window.removeEventListener("focus", refreshOnFocus);
+  }, [view]);
+
+  useEffect(() => {
+    if (view !== "wechat") return;
+    const shouldPoll = bridge.login_running || (!bridge.service_running && (!!bridge.qr_image_exists || !!bridgeBusy));
+    if (!shouldPoll) return;
+    const timer = window.setInterval(() => {
+      void loadBridge();
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [view, bridge.login_running, bridge.service_running, bridge.qr_image_exists, bridgeBusy]);
+
+  useEffect(() => {
+    if (view !== "wechat") return;
+    const ready = bridgeDraft.name.trim() && bridgeDraft.work_dir.trim();
+    if (!ready || bridge.has_logged_in_wechat_session || bridge.service_running || bridge.login_running || bridgeBusy) return;
+    if (autoLoginProjectRef.current === bridgeDraft.work_dir && bridge.qr_image_exists) return;
+    void ensureWechatLoginFlow(bridgeDraft.name.trim(), bridgeDraft.work_dir.trim(), true);
+  }, [
+    view,
+    bridgeBusy,
+    bridge.has_logged_in_wechat_session,
+    bridge.service_running,
+    bridge.login_running,
+    bridge.qr_image_exists,
+    bridgeDraft.name,
+    bridgeDraft.work_dir,
+  ]);
+
+  useEffect(() => {
+    if (view !== "wechat") return;
+    const ready = bridgeDraft.name.trim() && bridgeDraft.work_dir.trim();
+    if (!ready || bridge.service_running || bridge.login_running || bridgeBusy) return;
+    if (!bridge.has_logged_in_wechat_session) return;
+    void startWechatConnectionSilently("检测到已登录微信，自动补启动连接");
+  }, [
+    view,
+    bridgeBusy,
+    bridge.service_running,
+    bridge.login_running,
+    bridge.has_logged_in_wechat_session,
+    bridgeDraft.name,
+    bridgeDraft.work_dir,
+  ]);
+
   async function bootstrap() {
     await refreshSummary();
     await refreshProviders();
     await loadUsage();
+    const bridgeStatus = await ensureBridgeReady(true);
+    await autoStartWechatConnection(bridgeStatus);
     await loadWebdav();
   }
 
   async function refreshAll() {
-    await run("刷新状态", async () => {
+    await runScoped("sync", "刷新状态", async () => {
       await bootstrap();
       return "状态已刷新";
     });
@@ -197,8 +229,7 @@ function App() {
 
   async function refreshSummary() {
     try {
-      const next = await invoke<Summary>("get_summary");
-      setSummary(next);
+      setSummary(await invoke<Summary>("get_summary"));
     } catch (error) {
       appendLog(`读取 Codex 状态失败：${String(error)}`);
       setSummary((current) => ({ ...current, provider: "openai" }));
@@ -222,8 +253,7 @@ function App() {
 
   async function loadWebdav() {
     try {
-      const next = await invoke<WebDavConfig>("load_webdav_config");
-      setWebdav(next);
+      setWebdav(await invoke<WebDavConfig>("load_webdav_config"));
     } catch (error) {
       appendLog(`读取 WebDAV 配置失败：${String(error)}`);
     }
@@ -238,9 +268,76 @@ function App() {
     }
   }
 
-  async function run(label: string, action: () => Promise<string>) {
-    if (busy) return;
-    setBusy(label);
+  async function loadBridge(processTransitions = true) {
+    try {
+      const next = await invoke<BridgeStatus>("get_bridge_status");
+      const previous = bridgeStatusRef.current;
+      bridgeStatusRef.current = next;
+      setBridge(next);
+      const savedProject = next.projects[0];
+      setBridgeProjectName((current) => savedProject?.name || (current.trim() ? current : next.suggested_project_name));
+      setBridgeDraft((current) => {
+        if (savedProject) {
+          return bridgeDraftFromProject(savedProject);
+        }
+        return {
+          ...current,
+          name: current.name.trim() ? current.name : next.suggested_project_name,
+        };
+      });
+      if (processTransitions) {
+        void handleBridgeStatusTransition(previous, next);
+      }
+      return next;
+    } catch (error) {
+      appendLog(`读取微信连接状态失败：${String(error)}`);
+      setBridge(emptyBridge);
+      bridgeStatusRef.current = emptyBridge;
+      return null;
+    }
+  }
+
+  async function ensureBridgeReady(silent = false) {
+    const current = await loadBridge();
+    if (!current || current.installed) return current;
+    try {
+      const message = await invoke<string>("install_cc_connect");
+      appendLog(message);
+      if (!silent) showToast(message, "success");
+    } catch (error) {
+      const message = `初始化微信连接失败：${String(error)}`;
+      appendLog(message);
+      if (!silent) showToast(message, "error", 5200);
+      return current;
+    }
+    return loadBridge();
+  }
+
+  async function autoStartWechatConnection(status?: BridgeStatus | null) {
+    const current = status ?? await loadBridge();
+    if (!current) return;
+    const hasProject = current.projects.length > 0;
+    if (!current.installed || !current.config_exists || !hasProject || current.service_running) {
+      return;
+    }
+    try {
+      const message = await invoke<string>("open_cc_connect_terminal");
+      appendLog(`自动启动微信连接：${message}`);
+      await loadBridge();
+    } catch (error) {
+      appendLog(`自动启动微信连接失败：${String(error)}`);
+    }
+  }
+
+  async function runScoped(
+    scope: "sync" | "provider" | "bridge",
+    label: string,
+    action: () => Promise<string>,
+  ) {
+    const busyValue = scope === "sync" ? syncBusy : scope === "provider" ? providerBusy : bridgeBusy;
+    if (busyValue) return;
+    const setBusyValue = scope === "sync" ? setSyncBusy : scope === "provider" ? setProviderBusy : setBridgeBusy;
+    setBusyValue(label);
     appendLog(`开始：${label}`);
     showToast(`正在${label}...`, "info", 1600);
     try {
@@ -257,7 +354,7 @@ function App() {
       appendLog(message);
       showToast(message, "error", 5200);
     } finally {
-      setBusy(null);
+      setBusyValue(null);
     }
   }
 
@@ -273,15 +370,202 @@ function App() {
     }, duration);
   }
 
+  async function startWechatConnection() {
+    await runScoped("bridge", "启动微信连接", async () => {
+      await ensureBridgeReady(true);
+      const message = await invoke<string>("open_cc_connect_terminal");
+      await loadBridge();
+      return message;
+    });
+  }
+
+  async function stopWechatConnection() {
+    await runScoped("bridge", "停止微信连接", async () => {
+      const message = await invoke<string>("run_bridge_daemon_command", { action: "stop" });
+      await loadBridge();
+      return message;
+    });
+  }
+
+  async function reloginWechat() {
+    const projectName = bridgeDraft.name.trim();
+    const workDir = bridgeDraft.work_dir.trim();
+    if (!projectName || !workDir) {
+      showToast("请先选择项目", "error", 2600);
+      return;
+    }
+    await runScoped("bridge", "重新登录微信", async () => {
+      autoLoginProjectRef.current = "";
+      autoQrRetryRef.current = false;
+      const next = await ensureWechatLoginFlow(projectName, workDir, false);
+      return next?.qr_image_exists ? "已重新生成二维码，请用微信扫码" : "已重新开始微信登录流程";
+    });
+  }
+
+  async function refreshWechatQr() {
+    await reloginWechat();
+  }
+
+  function editBridgeProject(project: BridgeProjectStatus) {
+    setBridgeDraft({
+      name: project.name,
+      work_dir: project.work_dir,
+      allow_from: project.allow_from || "*",
+      admin_from: project.admin_from || "",
+      model: project.model || "gpt-5.5",
+      permission_mode: project.permission_mode || "plan",
+    });
+    setBridgeProjectName(project.name);
+  }
+
+  async function ensureWechatLoginFlow(projectName: string, workDir: string, silent = false) {
+    if (!projectName || !workDir || autoSetupBusyRef.current) return null;
+    autoSetupBusyRef.current = true;
+    try {
+      await ensureBridgeReady(true);
+      const message = await invoke<string>("open_wechat_setup_terminal", { projectName });
+      autoLoginProjectRef.current = workDir;
+      appendLog(message);
+      if (!silent) showToast("已更新二维码，请用微信扫码", "success", 2200);
+      return await loadBridge(false);
+    } catch (error) {
+      const message = `自动生成二维码失败：${String(error)}`;
+      appendLog(message);
+      if (!silent) showToast(message, "error", 4200);
+      return null;
+    } finally {
+      autoSetupBusyRef.current = false;
+    }
+  }
+
+  async function startWechatConnectionSilently(reason?: string) {
+    if (autoStartingBridgeRef.current) return null;
+    autoStartingBridgeRef.current = true;
+    try {
+      await ensureBridgeReady(true);
+      const message = await invoke<string>("open_cc_connect_terminal");
+      appendLog(reason ? `${reason}：${message}` : message);
+      return await loadBridge(false);
+    } catch (error) {
+      const message = `自动启动微信连接失败：${String(error)}`;
+      appendLog(message);
+      showToast(message, "error", 4200);
+      return null;
+    } finally {
+      autoStartingBridgeRef.current = false;
+    }
+  }
+
+  async function handleBridgeStatusTransition(previous: BridgeStatus, next: BridgeStatus) {
+    if (view !== "wechat") return;
+    if (next.service_running && !previous.service_running) {
+      showToast("微信连接已启动", "success", 2200);
+      autoLoginProjectRef.current = next.projects[0]?.work_dir ?? autoLoginProjectRef.current;
+      autoQrRetryRef.current = false;
+      return;
+    }
+    const scanCompleted = previous.login_running
+      && !next.login_running
+      && (next.has_logged_in_wechat_session || next.service_running || next.qr_image_exists);
+    if (scanCompleted) {
+      showToast(
+        next.service_running ? "扫码成功，微信连接已启动" : "扫码成功，正在启动微信连接",
+        "success",
+        2600,
+      );
+      if (!next.service_running) {
+        await startWechatConnectionSilently("扫码成功后自动启动");
+      }
+      return;
+    }
+    const loginEndedWithoutConnection = previous.login_running && !next.login_running && !next.service_running;
+    if (loginEndedWithoutConnection && !autoQrRetryRef.current && bridgeDraft.name.trim() && bridgeDraft.work_dir.trim()) {
+      autoQrRetryRef.current = true;
+      showToast("二维码可能已过期，正在自动刷新", "info", 2400);
+      await ensureWechatLoginFlow(bridgeDraft.name.trim(), bridgeDraft.work_dir.trim(), true);
+    }
+  }
+
+  async function selectCodexProject(project: CodexProjectStatus) {
+    const existing = bridge.projects.find((item) => item.work_dir === project.work_dir);
+    const payload: BridgeProjectDraft = existing ? {
+      name: existing.name,
+      work_dir: existing.work_dir,
+      allow_from: existing.allow_from || "*",
+      admin_from: existing.admin_from || "",
+      model: existing.model || "gpt-5.5",
+      permission_mode: existing.permission_mode || "plan",
+    } : {
+      ...bridgeDraft,
+      name: project.name || bridgeDraft.name || bridgeProjectName || "codex-tools-wechat",
+      work_dir: project.work_dir,
+      allow_from: bridgeDraft.allow_from.trim() || "*",
+      admin_from: bridgeDraft.admin_from.trim(),
+      model: bridgeDraft.model.trim() || "gpt-5.5",
+      permission_mode: bridgeDraft.permission_mode || "plan",
+    };
+
+    setBridgeDraft(payload);
+    setBridgeProjectName(payload.name);
+
+    if (existing) {
+      editBridgeProject(existing);
+    }
+
+    await runScoped("bridge", `切换项目到 ${project.name}`, async () => {
+      const message = await invoke<string>("save_bridge_project", { project: payload });
+      const next = await loadBridge(false);
+      const saved = next?.projects.find((item) => item.work_dir === payload.work_dir);
+      if (saved) {
+        setBridgeDraft({
+          name: saved.name,
+          work_dir: saved.work_dir,
+          allow_from: saved.allow_from || "*",
+          admin_from: saved.admin_from || "",
+          model: saved.model || "gpt-5.5",
+          permission_mode: saved.permission_mode || "plan",
+        });
+        setBridgeProjectName(saved.name);
+      }
+      if (!next?.has_logged_in_wechat_session) {
+        await ensureWechatLoginFlow(payload.name, payload.work_dir, false);
+      } else if (!next.service_running) {
+        await startWechatConnectionSilently("切换项目后自动启动");
+      }
+      return message || `已切换到项目：${project.name}`;
+    });
+  }
+
+  async function changeBridgePermissionMode(permissionMode: string) {
+    const payload: BridgeProjectDraft = {
+      ...bridgeDraft,
+      permission_mode: permissionMode,
+    };
+    if (!payload.name.trim() || !payload.work_dir.trim()) {
+      showToast("请先选择项目", "error", 2600);
+      return;
+    }
+    setBridgeDraft(payload);
+    await runScoped("bridge", "更新微信权限模式", async () => {
+      const message = await invoke<string>("save_bridge_project", { project: payload });
+      const next = await loadBridge(false);
+      if (next?.service_running) {
+        await invoke<string>("run_bridge_daemon_command", { action: "restart" });
+      }
+      await loadBridge(false);
+      return message;
+    });
+  }
+
   async function saveWebdav() {
-    await run("保存 WebDAV 配置", async () => {
+    await runScoped("sync", "保存 WebDAV 配置", async () => {
       await invoke("save_webdav_config", { config: webdav });
       return "WebDAV 配置已保存";
     });
   }
 
   async function switchProvider(providerId: string) {
-    await run(`切换 Provider 到 ${providerId}`, async () => {
+    await runScoped("provider", `切换 Provider 到 ${providerId}`, async () => {
       await invoke("switch_provider", { providerId });
       const result = await invoke<string>("unify_thread_provider");
       return `Provider 已切换到 ${providerId}，${result}`;
@@ -296,7 +580,7 @@ function App() {
       appendLog(`Provider ID 重复：${normalized.id}`);
       return;
     }
-    await run("保存 Provider 配置", async () => {
+    await runScoped("provider", "保存 Provider 配置", async () => {
       await invoke("save_provider", { provider: normalized });
       setView("providers");
       setEditingProviderId(null);
@@ -305,7 +589,7 @@ function App() {
   }
 
   async function fetchModels() {
-    await run("获取模型列表", async () => {
+    await runScoped("provider", "获取模型列表", async () => {
       const models = await invoke<ModelOption[]>("fetch_provider_models", { provider: normalizeProvider(providerDraft) });
       const ids = models.map((model) => model.id);
       setModelOptions(ids);
@@ -318,7 +602,7 @@ function App() {
 
   async function deleteProvider(providerId = providerDraft.id) {
     if (!providerId) return;
-    await run("删除 Provider 配置", async () => {
+    await runScoped("provider", "删除 Provider 配置", async () => {
       await invoke("delete_provider", { providerId });
       setProviderDraft(emptyProvider);
       setView("providers");
@@ -327,8 +611,8 @@ function App() {
   }
 
   async function selectProvider(provider: ProviderConfig) {
-    if (busy) return;
-    setBusy(`读取 Provider ${provider.id}`);
+    if (providerBusy) return;
+    setProviderBusy(`读取 Provider ${provider.id}`);
     showToast(`正在读取 Provider ${provider.id}...`, "info", 1600);
     try {
       const latest = await invoke<ProviderConfig>("get_provider", { providerId: provider.id });
@@ -344,7 +628,7 @@ function App() {
       setEditingProviderId(provider.id);
       showToast(message, "error", 5200);
     } finally {
-      setBusy(null);
+      setProviderBusy(null);
     }
     setView("provider-form");
   }
@@ -356,11 +640,27 @@ function App() {
     setView("provider-form");
   }
 
-  const isBuiltinOpenAI = providerDraft.id === "openai";
-  const activeProvider = providers.find((item) => item.id === summary.provider);
-  const providerCanSwitch = providerDraft.id && providerDraft.id !== summary.provider;
-  const providerCanDelete = providerDraft.id && providerDraft.id !== "openai" && providerDraft.id !== summary.provider && providers.some((item) => item.id === providerDraft.id);
-  const duplicateProviderId = Boolean(providerDraft.id.trim() && providers.some((provider) => provider.id === providerDraft.id.trim() && provider.id !== editingProviderId));
+  const toolStates = buildToolOverviewStates({
+    usage: {
+      totalCostUsd: usage.total_cost_usd,
+      providerCount: usage.providers.length,
+      usageEvents: usage.usage_events,
+    },
+    wechat: {
+      installed: bridge.installed,
+      projectCount: bridge.projects.length,
+      daemonStatus: bridge.daemon_status,
+    },
+    webdav: {
+      baseUrl: webdav.base_url,
+    },
+    logs: {
+      count: logs.length,
+      latestMessage: logs[0]?.message ?? "",
+    },
+    formatUsd,
+  });
+  const workspaceTools = getWorkspaceTools();
 
   return (
     <main className="app-shell">
@@ -373,254 +673,124 @@ function App() {
           </div>
         </div>
         <div className="toolbar">
-          <button className="tip-button" data-tip="拉取远端线程" aria-label="拉取远端线程" title="拉取远端线程" disabled={!!busy} onClick={() => run("拉取远端线程", () => invoke("pull_threads"))}><CloudDownload size={18} /></button>
-          <button className="tip-button" data-tip="推送本地线程" aria-label="推送本地线程" title="推送本地线程" disabled={!!busy} onClick={() => run("推送本地线程", () => invoke("push_threads"))}><CloudUpload size={18} /></button>
-          <button className="tip-button" data-tip="合并 Provider 线程" aria-label="合并 Provider 线程" title="合并 Provider 线程" disabled={!!busy} onClick={() => run("合并 Provider 线程", () => invoke("unify_thread_provider"))}><Shuffle size={18} /></button>
-          <button title="用量统计" aria-label="用量统计" data-tip="用量统计" className={`tip-button ${view === "usage" ? "active" : ""}`} onClick={() => setView("usage")}><BarChart3 size={18} /></button>
-          <button title="WebDAV 配置" aria-label="WebDAV 配置" data-tip="WebDAV 配置" className={`tip-button ${view === "webdav" ? "active" : ""}`} onClick={() => setView("webdav")}><Settings2 size={18} /></button>
-          <button title="运行日志" aria-label="运行日志" data-tip="运行日志" className={`tip-button ${view === "logs" ? "active" : ""}`} onClick={() => setView("logs")}><TerminalSquare size={18} /></button>
+          <button className="tip-button" data-tip="拉取远端线程" aria-label="拉取远端线程" title="拉取远端线程" disabled={!!syncBusy} onClick={() => void runScoped("sync", "拉取远端线程", () => invoke("pull_threads"))}><CloudDownload size={18} /></button>
+          <button className="tip-button" data-tip="推送本地线程" aria-label="推送本地线程" title="推送本地线程" disabled={!!syncBusy} onClick={() => void runScoped("sync", "推送本地线程", () => invoke("push_threads"))}><CloudUpload size={18} /></button>
+          <button className="tip-button" data-tip="合并 Provider 线程" aria-label="合并 Provider 线程" title="合并 Provider 线程" disabled={!!syncBusy} onClick={() => void runScoped("sync", "合并 Provider 线程", () => invoke("unify_thread_provider"))}><Shuffle size={18} /></button>
+          {workspaceTools.filter((tool) => tool.capabilities.hasDetailPage).map((tool) => {
+            const Icon = tool.icon;
+            return (
+              <button
+                key={tool.id}
+                title={tool.title}
+                aria-label={tool.title}
+                data-tip={tool.tip}
+                className={`tip-button ${view === tool.id ? "active" : ""}`}
+                onClick={() => setView(tool.id)}
+              >
+                <Icon size={18} />
+              </button>
+            );
+          })}
         </div>
-        <button className="add-provider-btn tip-button" data-tip="新建 Provider" aria-label="新建 Provider" title="新建 Provider" disabled={!!busy} onClick={newProvider}><Plus size={26} /></button>
+        <button className="add-provider-btn tip-button" data-tip="新建 Provider" aria-label="新建 Provider" title="新建 Provider" disabled={!!providerBusy} onClick={newProvider}><Plus size={26} /></button>
       </header>
 
       {view === "providers" ? (
-        <section className="provider-board">
-          <div className="board-meta">
-            <div>
-              <h2>Codex Providers</h2>
-              <p>当前 {summary.provider}，共 {providers.length} 个配置</p>
+        <ProviderDashboardPage
+          summary={summary}
+          providers={providers}
+          busy={!!providerBusy}
+          refreshAll={refreshAll}
+          switchProvider={switchProvider}
+          selectProvider={selectProvider}
+          deleteProvider={deleteProvider}
+          setView={setView}
+          toolCards={(
+            <div className="tool-overview-grid">
+              {workspaceTools.map((tool) => {
+                const Icon = tool.icon;
+                return (
+                  <button
+                    key={tool.id}
+                    className="tool-overview-card glass"
+                    disabled={!!providerBusy}
+                    onClick={() => setView(tool.id)}
+                  >
+                    <div className="tool-overview-icon">
+                      <Icon size={20} />
+                    </div>
+                    <div className="tool-overview-copy">
+                      <strong>{tool.title}</strong>
+                      <p>{tool.description}</p>
+                    </div>
+                    <div className="tool-overview-meta">
+                      <span>{toolStates[tool.id]?.label}</span>
+                      <small>{toolStates[tool.id]?.detail}</small>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
-            <div className="stat-pills">
-              <span>活跃 {summary.active_sessions}</span>
-              <span>归档 {summary.archived_sessions}</span>
-              <button disabled={!!busy} onClick={refreshAll}><RefreshCw size={15} />刷新</button>
-            </div>
-          </div>
-
-          <div className="provider-list-board">
-            {providers.map((provider) => (
-              <div className={`provider-list-card ${provider.id === summary.provider ? "current" : ""}`} key={provider.id}>
-                <div className="drag-grip">••<br />••</div>
-                <div className="provider-avatar">{provider.id.slice(0, 1).toUpperCase()}</div>
-                <div className="provider-card-main">
-                  <strong>{provider.id}</strong>
-                  <span>{provider.id === "openai" ? "官方 ChatGPT 登录模式" : providerSummary(provider)}</span>
-                </div>
-                <div className="provider-card-actions">
-                  {provider.id === summary.provider ? (
-                    <span className="session-pill"><CheckCircle2 size={16} />使用中</span>
-                  ) : (
-                    <button className="enable-btn" disabled={!!busy} onClick={() => switchProvider(provider.id)}>
-                      {busy?.includes(provider.id) ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
-                      启用
-                    </button>
-                  )}
-                  <button className="icon-action" disabled={!!busy} onClick={() => void selectProvider(provider)}>编辑</button>
-                  <button className="icon-action danger-text" disabled={!!busy || provider.id === summary.provider || provider.id === "openai"} onClick={() => deleteProvider(provider.id)}>删除</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
+          )}
+        />
       ) : null}
 
       {view === "provider-form" ? (
-        <section className="detail-page">
-          <div className="detail-card glass">
-            <button className="back-btn" onClick={() => setView("providers")}>返回</button>
-            <div className="detail-title">
-              <GitBranch size={34} />
-              <div>
-                <h2>{providerDraft.id ? "编辑 Codex Provider" : "新建 Codex Provider"}</h2>
-                <p>写入 Codex 的 config.toml，可用于切换 Provider 并同步历史线程。</p>
-              </div>
-            </div>
-            <div className="form-grid compact">
-              <label className={duplicateProviderId ? "field-error" : ""}>Provider ID<input value={providerDraft.id ?? ""} placeholder="如 openai / custom / deepseek" onChange={(event) => setProviderDraft({ ...providerDraft, id: event.target.value })} />{duplicateProviderId ? <span className="field-hint">这个 Provider ID 已存在，请保持唯一。</span> : null}</label>
-              <label>
-                认证方式
-                <select value={providerDraft.auth_type ?? (providerDraft.id === "openai" ? "chatgpt" : "api_key")} disabled={isBuiltinOpenAI} onChange={(event) => setProviderDraft({ ...providerDraft, auth_type: event.target.value })}>
-                  <option value="chatgpt">官方 ChatGPT 登录</option>
-                  <option value="api_key">API Key</option>
-                </select>
-              </label>
-              {!isBuiltinOpenAI ? <label>Base URL<input value={providerDraft.base_url ?? ""} placeholder="https://api.example.com/v1" onChange={(event) => setProviderDraft({ ...providerDraft, base_url: event.target.value })} /></label> : null}
-              {!isBuiltinOpenAI ? <label>API Key<input type="password" value={providerDraft.api_key ?? ""} placeholder="sk-..." onChange={(event) => setProviderDraft({ ...providerDraft, api_key: event.target.value })} /></label> : null}
-              <label>
-                模型
-                <div className="select-with-action">
-                  <select value={providerDraft.model ?? ""} onChange={(event) => setProviderDraft({ ...providerDraft, model: event.target.value })}>
-                    {uniqueOptions(providerDraft.model, modelOptions).map((model) => <option value={model} key={model}>{model}</option>)}
-                  </select>
-                  {!isBuiltinOpenAI ? <button type="button" disabled={!!busy} onClick={fetchModels}>{busy === "获取模型列表" ? "获取中" : "获取模型"}</button> : null}
-                </div>
-              </label>
-              <label>
-                推理强度
-                <select value={providerDraft.model_reasoning_effort ?? "medium"} onChange={(event) => setProviderDraft({ ...providerDraft, model_reasoning_effort: event.target.value })}>
-                  <option value="minimal">minimal</option>
-                  <option value="low">low</option>
-                  <option value="medium">medium</option>
-                  <option value="high">high</option>
-                  <option value="xhigh">xhigh</option>
-                </select>
-              </label>
-              {!isBuiltinOpenAI ? (
-                <label>
-                  Wire API
-                  <select value={providerDraft.wire_api ?? "responses"} onChange={(event) => setProviderDraft({ ...providerDraft, wire_api: event.target.value })}>
-                    <option value="responses">responses</option>
-                    <option value="chat">chat</option>
-                  </select>
-                </label>
-              ) : null}
-            </div>
-            <div className="detail-actions">
-              <button className="editor-action primary-action" disabled={!!busy || !providerDraft.id || duplicateProviderId} onClick={saveProvider}><Save size={16} />保存 Provider</button>
-              <button className="editor-action" disabled={!!busy || !providerCanSwitch} onClick={() => switchProvider(providerDraft.id)}><Shuffle size={16} />切换并合并</button>
-              <button className="editor-action danger-action" disabled={!!busy || !providerCanDelete} onClick={() => deleteProvider()}><Trash2 size={16} />删除</button>
-            </div>
-          </div>
-        </section>
+        <ProviderFormPage
+          providerDraft={providerDraft}
+          editingProviderId={editingProviderId}
+          providers={providers}
+          currentProviderId={summary.provider}
+          busy={providerBusy}
+          modelOptions={modelOptions}
+          onBack={() => setView("providers")}
+          setProviderDraft={setProviderDraft}
+          fetchModels={fetchModels}
+          saveProvider={saveProvider}
+          switchProvider={switchProvider}
+          deleteProvider={deleteProvider}
+        />
       ) : null}
 
       {view === "usage" ? (
-        <section className="usage-page">
-          <button className="back-btn" onClick={() => setView("providers")}>返回</button>
-          <div className="board-meta">
-            <div>
-              <h2>Codex 用量统计</h2>
-              <p>基于本地 JSONL 离线统计，Cost 统一按 OpenAI 官方模型价格估算</p>
-            </div>
-            <div className="stat-pills">
-              <span>文件 {usage.files_scanned}</span>
-              <span>事件 {usage.usage_events}</span>
-              <button disabled={!!busy} onClick={loadUsage}><RefreshCw size={15} />刷新</button>
-            </div>
-          </div>
+        <UsagePage
+          usage={usage}
+          busy={!!syncBusy}
+          onBack={() => setView("providers")}
+          onRefresh={loadUsage}
+          formatUsd={formatUsd}
+          formatToken={formatToken}
+        />
+      ) : null}
 
-          <div className="usage-summary-grid">
-            <div className="usage-metric-card">
-              <span>估算 Cost</span>
-              <strong>{formatUsd(usage.total_cost_usd)}</strong>
-            </div>
-            <div className="usage-metric-card">
-              <span>总 Token</span>
-              <strong>{formatToken(usage.total.total_tokens)}</strong>
-            </div>
-            <div className="usage-metric-card">
-              <span>输入 Token</span>
-              <strong>{formatToken(usage.total.input_tokens)}</strong>
-            </div>
-            <div className="usage-metric-card">
-              <span>缓存输入</span>
-              <strong>{formatToken(usage.total.cached_input_tokens)}</strong>
-            </div>
-          </div>
-
-          <div className="usage-table-card glass provider-usage-card">
-            <div className="usage-table-title">Provider 汇总</div>
-            <div className="usage-table-head provider-head">
-              <span>Provider</span>
-              <span>Cost</span>
-              <span>总量</span>
-              <span>输入</span>
-              <span>缓存</span>
-              <span>输出</span>
-              <span>事件</span>
-            </div>
-            <div className="usage-table-body provider-body">
-              {usage.providers.length === 0 ? <p className="empty">暂无 Provider 维度数据</p> : null}
-              {usage.providers.map((provider) => (
-                <div className="usage-row provider-row" key={provider.provider}>
-                  <span>{provider.provider}</span>
-                  <strong>{formatUsd(provider.cost_usd)}</strong>
-                  <span>{formatToken(provider.total_tokens)}</span>
-                  <span>{formatToken(provider.input_tokens)}</span>
-                  <span>{formatToken(provider.cached_input_tokens)}</span>
-                  <span>{formatToken(provider.output_tokens)}</span>
-                  <span>{provider.events}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="usage-table-card glass">
-            <div className="usage-table-title">每日用量</div>
-            <div className="usage-table-head">
-              <span>日期</span>
-              <span>Cost</span>
-              <span>总量</span>
-              <span>输入</span>
-              <span>缓存</span>
-              <span>输出</span>
-              <span>推理</span>
-              <span>事件</span>
-            </div>
-            <div className="usage-table-body">
-              {usage.days.length === 0 ? <p className="empty">暂无可统计的 Codex token_count 记录</p> : null}
-              {usage.days.map((day) => (
-                <div className="usage-row" key={day.date}>
-                  <span>{day.date}</span>
-                  <strong>{formatUsd(day.cost_usd)}</strong>
-                  <span>{formatToken(day.total_tokens)}</span>
-                  <span>{formatToken(day.input_tokens)}</span>
-                  <span>{formatToken(day.cached_input_tokens)}</span>
-                  <span>{formatToken(day.output_tokens)}</span>
-                  <span>{formatToken(day.reasoning_output_tokens)}</span>
-                  <span>{day.events}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
+      {view === "wechat" ? (
+        <WechatPage
+          bridge={bridge}
+          currentWorkDir={bridgeDraft.work_dir}
+          busy={!!bridgeBusy}
+          onBack={() => setView("providers")}
+          selectCodexProject={selectCodexProject}
+          permissionMode={bridgeDraft.permission_mode}
+          changePermissionMode={changeBridgePermissionMode}
+          refreshWechatQr={refreshWechatQr}
+          reloginWechat={reloginWechat}
+          startWechatConnection={startWechatConnection}
+          stopWechatConnection={stopWechatConnection}
+        />
       ) : null}
 
       {view === "webdav" ? (
-        <section className="detail-page">
-          <div className="detail-card compact-card glass">
-            <button className="back-btn" onClick={() => setView("providers")}>返回</button>
-            <div className="detail-title">
-              <Settings2 size={34} />
-              <div>
-                <h2>WebDAV 配置</h2>
-                <p>配置一次即可，之后只通过顶部同步按钮使用。</p>
-              </div>
-            </div>
-            <div className="form-grid">
-              <label>服务地址<input value={webdav.base_url} onChange={(event) => setWebdav({ ...webdav, base_url: event.target.value })} /></label>
-              <label>用户名<input value={webdav.username} onChange={(event) => setWebdav({ ...webdav, username: event.target.value })} /></label>
-              <label>密码<input type="password" value={webdav.password} onChange={(event) => setWebdav({ ...webdav, password: event.target.value })} /></label>
-              <label className="checkbox-row"><input type="checkbox" checked={webdav.verify_tls} onChange={(event) => setWebdav({ ...webdav, verify_tls: event.target.checked })} />校验证书 TLS</label>
-            </div>
-            <div className="detail-actions"><button className="editor-action primary-action" disabled={!!busy} onClick={saveWebdav}>保存 WebDAV 配置</button></div>
-          </div>
-        </section>
+        <WebdavPage webdav={webdav} busy={!!syncBusy} onBack={() => setView("providers")} onSave={saveWebdav} setWebdav={setWebdav} />
       ) : null}
 
       {view === "logs" ? (
-        <section className="detail-page">
-          <div className="detail-card compact-card glass">
-            <button className="back-btn" onClick={() => setView("providers")}>返回</button>
-            <div className="detail-title">
-              <TerminalSquare size={34} />
-              <div>
-                <h2>运行日志</h2>
-                <p>仅在排查同步或 Provider 问题时查看。</p>
-              </div>
-            </div>
-            <div className="log-list standalone">
-              {logs.length === 0 ? <p className="empty">暂无日志</p> : null}
-              {logs.map((line) => <div className="log-line" key={line.id}>{line.message}</div>)}
-            </div>
-          </div>
-        </section>
+        <LogsPage logs={logs} onBack={() => setView("providers")} />
       ) : null}
 
       <footer>
         <Archive size={14} />
         <span>{summary.codex_dir || "Codex 目录未检测"}</span>
-        <button onClick={refreshAll} disabled={!!busy}><RefreshCw size={13} />刷新</button>
+        <button onClick={refreshAll} disabled={!!syncBusy}><RefreshCw size={13} />刷新</button>
       </footer>
     </main>
   );
@@ -667,11 +837,6 @@ function ensureBuiltinOpenAI(providers: ProviderConfig[]) {
   return [builtinOpenAIProvider, ...providers];
 }
 
-function providerSummary(provider?: ProviderConfig) {
-  if (!provider) return "Codex 默认 Provider";
-  return provider.base_url || provider.wire_api || "Codex 默认 Provider";
-}
-
 function providerDefaults(providerId?: string): Required<Omit<ProviderConfig, "id">> {
   if (!providerId || providerId === "openai") {
     return {
@@ -697,8 +862,15 @@ function providerDefaults(providerId?: string): Required<Omit<ProviderConfig, "i
   };
 }
 
-function uniqueOptions(current: string | undefined, options: string[]) {
-  return Array.from(new Set([current || "gpt-5.4", ...options].filter(Boolean)));
+function bridgeDraftFromProject(project: BridgeProjectStatus): BridgeProjectDraft {
+  return {
+    name: project.name,
+    work_dir: project.work_dir,
+    allow_from: project.allow_from || "*",
+    admin_from: project.admin_from || "",
+    model: project.model || "gpt-5.5",
+    permission_mode: project.permission_mode || "plan",
+  };
 }
 
 function formatToken(value: number) {
@@ -711,36 +883,6 @@ function formatUsd(value: number) {
   if (!Number.isFinite(value) || value <= 0) return "$0.00";
   if (value < 0.01) return `$${value.toFixed(4)}`;
   return `$${value.toFixed(2)}`;
-}
-
-function Metric({ label, value, accent }: { label: string; value: string | number; accent: "blue" | "green" | "purple" }) {
-  return (
-    <div className={`metric ${accent}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function ActionCard({ icon, title, desc, busy, onClick }: { icon: React.ReactNode; title: string; desc: string; busy: boolean; onClick: () => void }) {
-  return (
-    <button className="action-card glass" onClick={onClick} disabled={busy}>
-      <div className="action-icon">{busy ? <Loader2 className="spin" /> : icon}</div>
-      <div>
-        <strong>{title}</strong>
-        <span>{desc}</span>
-      </div>
-    </button>
-  );
-}
-
-function PanelTitle({ icon, title }: { icon: React.ReactNode; title: string }) {
-  return (
-    <div className="panel-title">
-      {icon}
-      <h3>{title}</h3>
-    </div>
-  );
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
