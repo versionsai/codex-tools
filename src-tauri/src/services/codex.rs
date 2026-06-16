@@ -1360,7 +1360,6 @@ fn repair_thread_visibility_index_for_dir(
     codex: &Path,
     provider: &str,
 ) -> Result<ThreadRepairSummary> {
-    quit_codex_app_before_state_write()?;
     let rollout_files = sync_rollout_paths(codex);
     let project_mapper = ProjectNameMapper::from_codex(codex);
     let mut metas = Vec::new();

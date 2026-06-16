@@ -574,9 +574,7 @@ function App() {
 
   async function repairThreadVisibilityIndex() {
     await runScoped("sync", "修复线程可见性", async () => {
-      const result = await invoke<string>("repair_thread_visibility_index");
-      const restartMessage = await invoke<string>("restart_codex_app");
-      return `${result}，${restartMessage}`;
+      return await invoke<string>("repair_thread_visibility_index");
     });
   }
 
