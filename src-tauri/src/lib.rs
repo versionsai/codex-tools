@@ -21,6 +21,120 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, Runtime, WindowEvent};
 
 const FRONTEND_REFRESH_EVENT: &str = "codex-tools-refresh";
 
+#[cfg(target_os = "macos")]
+mod macos_status_item {
+    use super::{notify_frontend_refresh, APP_HANDLE};
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyObject, NSObject};
+    use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly, MainThreadMarker};
+    use objc2_app_kit::{
+        NSMenu, NSMenuItem, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
+    };
+    use objc2_foundation::{NSString, NSObjectProtocol};
+    use std::cell::OnceCell;
+    use tauri::Manager;
+
+    pub struct NativeStatusItem {
+        _target: Retained<StatusItemTarget>,
+    }
+
+    impl NativeStatusItem {
+        pub fn new() -> Option<Self> {
+            let mtm = MainThreadMarker::new()?;
+            let target = StatusItemTarget::new(mtm);
+            target.install(mtm);
+            Some(Self { _target: target })
+        }
+    }
+
+    struct StatusItemIvars {
+        status_item: OnceCell<Retained<NSStatusItem>>,
+        menu: OnceCell<Retained<NSMenu>>,
+    }
+
+    define_class!(
+        #[unsafe(super(NSObject))]
+        #[thread_kind = MainThreadOnly]
+        #[ivars = StatusItemIvars]
+        struct StatusItemTarget;
+
+        unsafe impl NSObjectProtocol for StatusItemTarget {}
+
+        impl StatusItemTarget {
+            #[unsafe(method(openCodexTools:))]
+            fn open_codex_tools(&self, _sender: &AnyObject) {
+                if let Some(app) = APP_HANDLE.get() {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                    notify_frontend_refresh(app);
+                }
+            }
+
+            #[unsafe(method(quitCodexTools:))]
+            fn quit_codex_tools(&self, _sender: &AnyObject) {
+                std::process::exit(0);
+            }
+        }
+    );
+
+    impl StatusItemTarget {
+        fn new(mtm: MainThreadMarker) -> Retained<Self> {
+            let target = mtm.alloc().set_ivars(StatusItemIvars {
+                status_item: OnceCell::new(),
+                menu: OnceCell::new(),
+            });
+            unsafe { msg_send![super(target), init] }
+        }
+
+        fn install(&self, mtm: MainThreadMarker) {
+            let status_item =
+                NSStatusBar::systemStatusBar().statusItemWithLength(NSVariableStatusItemLength);
+            if let Some(button) = status_item.button(mtm) {
+                button.setTitle(&NSString::from_str("CT"));
+            }
+            let menu = self.build_menu(mtm);
+            status_item.setMenu(Some(&menu));
+
+            let _ = self.ivars().status_item.set(status_item);
+            let _ = self.ivars().menu.set(menu);
+        }
+
+        fn build_menu(&self, mtm: MainThreadMarker) -> Retained<NSMenu> {
+            let menu = NSMenu::new(mtm);
+            menu.addItem(&self.action_item(
+                "打开 Codex Tools",
+                sel!(openCodexTools:),
+                mtm,
+            ));
+            menu.addItem(&NSMenuItem::separatorItem(mtm));
+            menu.addItem(&self.action_item("退出", sel!(quitCodexTools:), mtm));
+            menu
+        }
+
+        fn action_item(
+            &self,
+            title: &str,
+            action: objc2::runtime::Sel,
+            mtm: MainThreadMarker,
+        ) -> Retained<NSMenuItem> {
+            let item = unsafe {
+                NSMenuItem::initWithTitle_action_keyEquivalent(
+                    mtm.alloc(),
+                    &NSString::from_str(title),
+                    Some(action),
+                    &NSString::from_str(""),
+                )
+            };
+            unsafe {
+                item.setTarget(Some(self));
+            }
+            item
+        }
+    }
+}
+
 #[tauri::command]
 async fn get_summary() -> Result<services::codex::Summary, String> {
     tauri::async_runtime::spawn_blocking(get_summary_impl)
@@ -251,6 +365,10 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building Codex Tools");
+
+    #[cfg(target_os = "macos")]
+    let _native_status_item = macos_status_item::NativeStatusItem::new();
+
     app.run(|app, event| match event {
         RunEvent::WindowEvent {
             label,
