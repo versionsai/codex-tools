@@ -31,19 +31,32 @@ mod macos_status_item {
         NSMenu, NSMenuItem, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
     };
     use objc2_foundation::{NSString, NSObjectProtocol};
-    use std::cell::OnceCell;
+    use std::cell::{OnceCell, RefCell};
     use tauri::Manager;
+
+    thread_local! {
+        static NATIVE_STATUS_ITEM: RefCell<Option<NativeStatusItem>> = const { RefCell::new(None) };
+    }
+
+    pub fn install() {
+        NATIVE_STATUS_ITEM.with(|status_item| match NativeStatusItem::new() {
+            Ok(native_status_item) => {
+                status_item.replace(Some(native_status_item));
+            }
+            Err(reason) => eprintln!("Codex Tools native status item unavailable: {reason}"),
+        });
+    }
 
     pub struct NativeStatusItem {
         _target: Retained<StatusItemTarget>,
     }
 
     impl NativeStatusItem {
-        pub fn new() -> Option<Self> {
-            let mtm = MainThreadMarker::new()?;
+        pub fn new() -> Result<Self, &'static str> {
+            let mtm = MainThreadMarker::new().ok_or("not on macOS main thread")?;
             let target = StatusItemTarget::new(mtm);
             target.install(mtm);
-            Some(Self { _target: target })
+            Ok(Self { _target: target })
         }
     }
 
@@ -91,11 +104,21 @@ mod macos_status_item {
         fn install(&self, mtm: MainThreadMarker) {
             let status_item =
                 NSStatusBar::systemStatusBar().statusItemWithLength(NSVariableStatusItemLength);
+            status_item.setLength(36.0);
+            status_item.setVisible(true);
             if let Some(button) = status_item.button(mtm) {
                 button.setTitle(&NSString::from_str("CT"));
+                button.setToolTip(Some(&NSString::from_str("Codex Tools")));
+            } else {
+                eprintln!("Codex Tools native status item created without button");
             }
             let menu = self.build_menu(mtm);
             status_item.setMenu(Some(&menu));
+            eprintln!(
+                "Codex Tools native status item installed: visible={}, length={}",
+                status_item.isVisible(),
+                status_item.length()
+            );
 
             let _ = self.ivars().status_item.set(status_item);
             let _ = self.ivars().menu.set(menu);
@@ -326,6 +349,8 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Regular);
             #[cfg(target_os = "macos")]
+            macos_status_item::install();
+            #[cfg(target_os = "macos")]
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
@@ -365,9 +390,6 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building Codex Tools");
-
-    #[cfg(target_os = "macos")]
-    let _native_status_item = macos_status_item::NativeStatusItem::new();
 
     app.run(|app, event| match event {
         RunEvent::WindowEvent {
