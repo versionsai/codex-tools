@@ -17,28 +17,9 @@ use services::{
         WebDavConfig,
     },
 };
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Mutex,
-};
-use tauri::{
-    image::Image,
-    menu::{MenuBuilder, MenuEvent},
-    tray::{TrayIcon, TrayIconBuilder},
-    AppHandle, Emitter, Manager, RunEvent, Runtime, WindowEvent, Wry,
-};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, Runtime, WindowEvent};
 
-const TRAY_ID: &str = "codex-tools-tray";
-const TRAY_OPEN: &str = "tray:open";
-const TRAY_REFRESH: &str = "tray:refresh";
-const TRAY_QUIT: &str = "tray:quit";
-const TRAY_PROVIDER_PREFIX: &str = "tray:provider:";
 const FRONTEND_REFRESH_EVENT: &str = "codex-tools-refresh";
-
-#[derive(Default)]
-struct AppState {
-    tray: Mutex<Option<TrayIcon<Wry>>>,
-}
 
 #[tauri::command]
 async fn get_summary() -> Result<services::codex::Summary, String> {
@@ -217,43 +198,6 @@ async fn push_threads() -> Result<String, String> {
 }
 
 fn refresh_tray_menu_for_app() -> tauri::Result<()> {
-    let Some(app) = APP_HANDLE.get() else {
-        return Ok(());
-    };
-    refresh_tray_menu(app)
-}
-
-fn build_tray_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R>> {
-    let current = get_summary_impl()
-        .map(|summary| summary.provider)
-        .unwrap_or_else(|_| "unknown".to_string());
-    let providers = list_providers_impl().unwrap_or_default();
-    let mut builder = MenuBuilder::new(app)
-        .text("tray:title", format!("当前 Provider：{}", current))
-        .separator();
-    for provider in providers {
-        let checked = provider.id == current;
-        let label = if checked {
-            format!("✓ {}", provider.id)
-        } else {
-            format!("  {}", provider.id)
-        };
-        builder = builder.text(format!("{}{}", TRAY_PROVIDER_PREFIX, provider.id), label);
-    }
-    builder
-        .separator()
-        .text(TRAY_OPEN, "打开 Codex Tools")
-        .text(TRAY_REFRESH, "刷新 Provider 列表")
-        .separator()
-        .text(TRAY_QUIT, "退出")
-        .build()
-}
-
-fn refresh_tray_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
-    if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        let menu = build_tray_menu(app)?;
-        tray.set_menu(Some(menu))?;
-    }
     Ok(())
 }
 
@@ -261,55 +205,12 @@ fn notify_frontend_refresh<R: Runtime>(app: &AppHandle<R>) {
     let _ = app.emit(FRONTEND_REFRESH_EVENT, ());
 }
 
-fn handle_tray_menu_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
-    let id = event.id().0.as_str();
-    if id == TRAY_OPEN {
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.show();
-            let _ = window.set_focus();
-        }
-        notify_frontend_refresh(app);
-        return;
-    }
-    if id == TRAY_REFRESH {
-        let _ = refresh_tray_menu(app);
-        return;
-    }
-    if id == TRAY_QUIT {
-        SHOULD_QUIT.store(true, Ordering::SeqCst);
-        app.exit(0);
-        return;
-    }
-    if let Some(provider_id) = id.strip_prefix(TRAY_PROVIDER_PREFIX) {
-        if switch_provider_impl(provider_id).is_ok() {
-            let _ = unify_thread_provider_impl();
-            let _ = restart_codex_app_impl();
-        }
-        let _ = refresh_tray_menu(app);
-        notify_frontend_refresh(app);
-    }
-}
-
-fn setup_tray<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<TrayIcon<R>> {
-    let handle = app.handle().clone();
-    let menu = build_tray_menu(&handle)?;
-    let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
-    TrayIconBuilder::with_id(TRAY_ID)
-        .icon(icon)
-        .tooltip("Codex Tools")
-        .menu(&menu)
-        .show_menu_on_left_click(true)
-        .on_menu_event(handle_tray_menu_event)
-        .build(app)
-}
-
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .manage(AppState::default())
         .setup(|app| {
             #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            app.set_activation_policy(tauri::ActivationPolicy::Regular);
             #[cfg(target_os = "macos")]
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
@@ -321,8 +222,6 @@ pub fn run() {
                 let _ = window.set_skip_taskbar(false);
                 let _ = window.set_focus();
             }
-            let tray = setup_tray(app)?;
-            *app.state::<AppState>().tray.lock().unwrap() = Some(tray);
             APP_HANDLE.set(app.handle().clone()).ok();
             Ok(())
         })
@@ -363,11 +262,6 @@ pub fn run() {
                 let _ = window.hide();
             }
         }
-        RunEvent::ExitRequested { api, .. } => {
-            if !SHOULD_QUIT.load(Ordering::SeqCst) {
-                api.prevent_exit();
-            }
-        }
         #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => {
             if let Some(window) = app.get_webview_window("main") {
@@ -381,4 +275,3 @@ pub fn run() {
 }
 
 static APP_HANDLE: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
-static SHOULD_QUIT: AtomicBool = AtomicBool::new(false);
