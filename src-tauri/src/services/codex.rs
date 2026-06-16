@@ -569,10 +569,7 @@ pub fn restart_codex_app_impl() -> Result<String> {
     {
         let app_path = find_codex_app_path_macos()
             .ok_or_else(|| anyhow!("未找到 Codex.app，请确认已安装桌面版 Codex"))?;
-        let _ = Command::new("osascript")
-            .args(["-e", "tell application \"Codex\" to quit"])
-            .status();
-        wait_for_process_exit("Codex", 12, 500);
+        quit_codex_app_before_state_write()?;
         let open_status = Command::new("open")
             .args(["-a", &app_path.display().to_string()])
             .status()?;
@@ -586,10 +583,7 @@ pub fn restart_codex_app_impl() -> Result<String> {
     {
         let launch_target = find_codex_launch_target_windows()
             .ok_or_else(|| anyhow!("未找到 Codex.exe 或 Codex.lnk，请确认已安装桌面版 Codex"))?;
-        let _ = Command::new("taskkill")
-            .args(["/IM", "Codex.exe", "/T", "/F"])
-            .status();
-        wait_for_process_exit("Codex.exe", 12, 500);
+        quit_codex_app_before_state_write()?;
         let open_status = Command::new("cmd")
             .args(["/C", "start", "", &launch_target.display().to_string()])
             .status()?;
@@ -603,6 +597,30 @@ pub fn restart_codex_app_impl() -> Result<String> {
     Err(anyhow!("当前平台暂未实现自动重启 Codex"))
 }
 
+fn quit_codex_app_before_state_write() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("osascript")
+            .args(["-e", "tell application \"Codex\" to quit"])
+            .status();
+        if !wait_for_process_exit("Codex", 20, 500) {
+            return Err(anyhow!("Codex 未完全退出，请手动关闭后重试"));
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/IM", "Codex.exe", "/T", "/F"])
+            .status();
+        if !wait_for_process_exit("Codex.exe", 20, 500) {
+            return Err(anyhow!("Codex 未完全退出，请手动关闭后重试"));
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 fn find_codex_app_path_macos() -> Option<PathBuf> {
     let candidates = [
@@ -612,13 +630,14 @@ fn find_codex_app_path_macos() -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.exists())
 }
 
-fn wait_for_process_exit(process_name: &str, max_attempts: usize, sleep_ms: u64) {
+fn wait_for_process_exit(process_name: &str, max_attempts: usize, sleep_ms: u64) -> bool {
     for _ in 0..max_attempts {
         if !is_process_running(process_name) {
-            return;
+            return true;
         }
         thread::sleep(Duration::from_millis(sleep_ms));
     }
+    !is_process_running(process_name)
 }
 
 fn is_process_running(process_name: &str) -> bool {
@@ -1341,6 +1360,7 @@ fn repair_thread_visibility_index_for_dir(
     codex: &Path,
     provider: &str,
 ) -> Result<ThreadRepairSummary> {
+    quit_codex_app_before_state_write()?;
     let rollout_files = sync_rollout_paths(codex);
     let project_mapper = ProjectNameMapper::from_codex(codex);
     let mut metas = Vec::new();
