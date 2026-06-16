@@ -28,7 +28,8 @@ mod macos_status_item {
     use objc2::runtime::{AnyObject, NSObject};
     use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly, MainThreadMarker};
     use objc2_app_kit::{
-        NSMenu, NSMenuItem, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
+        NSCellImagePosition, NSImage, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
+        NSVariableStatusItemLength,
     };
     use objc2_foundation::{NSString, NSObjectProtocol};
     use std::cell::{OnceCell, RefCell};
@@ -85,6 +86,15 @@ mod macos_status_item {
                 }
             }
 
+            #[unsafe(method(showCodexToolsMenu:))]
+            fn show_codex_tools_menu(&self, _sender: &AnyObject) {
+                if let (Some(status_item), Some(menu)) =
+                    (self.ivars().status_item.get(), self.ivars().menu.get())
+                {
+                    status_item.popUpStatusItemMenu(menu);
+                }
+            }
+
             #[unsafe(method(quitCodexTools:))]
             fn quit_codex_tools(&self, _sender: &AnyObject) {
                 std::process::exit(0);
@@ -106,9 +116,24 @@ mod macos_status_item {
                 NSStatusBar::systemStatusBar().statusItemWithLength(NSVariableStatusItemLength);
             status_item.setLength(36.0);
             status_item.setVisible(true);
+            status_item.setAutosaveName(Some(&NSString::from_str("cn.sai.codex-tools.status")));
             if let Some(button) = status_item.button(mtm) {
-                button.setTitle(&NSString::from_str("CT"));
+                button.setTitle(&NSString::from_str(""));
+                if let Some(image) = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+                    &NSString::from_str("cpu"),
+                    Some(&NSString::from_str("Codex Tools")),
+                ) {
+                    image.setTemplate(true);
+                    button.setImage(Some(&image));
+                    button.setImagePosition(NSCellImagePosition::ImageOnly);
+                } else {
+                    button.setTitle(&NSString::from_str("CT"));
+                }
                 button.setToolTip(Some(&NSString::from_str("Codex Tools")));
+                unsafe {
+                    button.setTarget(Some(self));
+                    button.setAction(Some(sel!(showCodexToolsMenu:)));
+                }
             } else {
                 eprintln!("Codex Tools native status item created without button");
             }
