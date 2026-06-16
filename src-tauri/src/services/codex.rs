@@ -6,7 +6,7 @@ use chrono::{DateTime, Local};
 use rusqlite::{params_from_iter, types::Value as SqlValue, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -97,6 +97,8 @@ pub struct ThreadRepairSummary {
     pub inserted_rows: usize,
     pub updated_rows: usize,
     pub index_entries: usize,
+    pub remapped_cwd_rows: usize,
+    pub workspace_hint_rows: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -820,11 +822,13 @@ pub fn unify_thread_provider_impl() -> Result<String> {
     }
     let repair = repair_thread_visibility_index_for_dir(&dir, &provider)?;
     Ok(format!(
-        "合并完成：扫描 {} 个，修改 {} 个，补齐线程行 {} 条，更新线程行 {} 条，索引 {} 条",
+        "合并完成：扫描 {} 个，修改 {} 个，补齐线程行 {} 条，更新线程行 {} 条，项目名映射 {} 条，项目归属 {} 条，索引 {} 条",
         rollout_files.len(),
         rollout_changed,
         repair.inserted_rows,
         repair.updated_rows,
+        repair.remapped_cwd_rows,
+        repair.workspace_hint_rows,
         repair.index_entries
     ))
 }
@@ -834,8 +838,13 @@ pub fn repair_thread_visibility_index_impl() -> Result<String> {
     let provider = current_provider()?;
     let repair = repair_thread_visibility_index_for_dir(&dir, &provider)?;
     Ok(format!(
-        "修复完成：扫描 {} 个，补齐线程行 {} 条，更新线程行 {} 条，索引 {} 条",
-        repair.rollout_files, repair.inserted_rows, repair.updated_rows, repair.index_entries
+        "修复完成：扫描 {} 个，补齐线程行 {} 条，更新线程行 {} 条，项目名映射 {} 条，项目归属 {} 条，索引 {} 条",
+        repair.rollout_files,
+        repair.inserted_rows,
+        repair.updated_rows,
+        repair.remapped_cwd_rows,
+        repair.workspace_hint_rows,
+        repair.index_entries
     ))
 }
 
@@ -1316,6 +1325,7 @@ struct ThreadMeta {
     reasoning_effort: Option<String>,
     thread_source: Option<String>,
     preview: String,
+    cwd_was_remapped: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1332,19 +1342,24 @@ fn repair_thread_visibility_index_for_dir(
     provider: &str,
 ) -> Result<ThreadRepairSummary> {
     let rollout_files = sync_rollout_paths(codex);
+    let project_mapper = ProjectNameMapper::from_codex(codex);
     let mut metas = Vec::new();
     for path in &rollout_files {
-        if let Some(meta) = read_thread_meta(codex, path, provider)? {
+        if let Some(meta) = read_thread_meta(codex, path, provider, &project_mapper)? {
             metas.push(meta);
         }
     }
+    let remapped_cwd_rows = metas.iter().filter(|meta| meta.cwd_was_remapped).count();
     let (inserted_rows, updated_rows) = upsert_thread_rows(codex, &metas)?;
+    let workspace_hint_rows = repair_thread_workspace_root_hints(codex, &metas, &project_mapper)?;
     let index_entries = rebuild_index(codex, provider)?;
     Ok(ThreadRepairSummary {
         rollout_files: rollout_files.len(),
         inserted_rows,
         updated_rows,
         index_entries,
+        remapped_cwd_rows,
+        workspace_hint_rows,
     })
 }
 
@@ -1439,6 +1454,10 @@ fn update_existing_thread_row(
             values.push(value);
         }
     }
+    if column_names.contains("cwd") && !meta.cwd.trim().is_empty() {
+        assignments.push(format!("{} = ?", quote_identifier("cwd")));
+        values.push(SqlValue::Text(meta.cwd.clone()));
+    }
     for (name, value) in optional_update_values(meta) {
         if column_names.contains(name) {
             assignments.push(format!(
@@ -1459,7 +1478,6 @@ fn update_existing_thread_row(
 
 fn optional_update_values(meta: &ThreadMeta) -> Vec<(&'static str, SqlValue)> {
     vec![
-        ("cwd", SqlValue::Text(meta.cwd.clone())),
         ("source", SqlValue::Text(meta.source.clone())),
         ("thread_source", nullable_text(meta.thread_source.clone())),
         ("git_sha", nullable_text(meta.git_sha.clone())),
@@ -1563,7 +1581,66 @@ fn nullable_text(value: Option<String>) -> SqlValue {
         .unwrap_or(SqlValue::Null)
 }
 
-fn read_thread_meta(codex: &Path, path: &Path, provider: &str) -> Result<Option<ThreadMeta>> {
+fn repair_thread_workspace_root_hints(
+    codex: &Path,
+    metas: &[ThreadMeta],
+    project_mapper: &ProjectNameMapper,
+) -> Result<usize> {
+    let global_state_path = codex.join(".codex-global-state.json");
+    if !global_state_path.exists() {
+        return Ok(0);
+    }
+    let content = fs::read_to_string(&global_state_path)?;
+    let mut value: Value = serde_json::from_str(&content)?;
+    let Some(root) = value.as_object_mut() else {
+        return Ok(0);
+    };
+    let hints_value = root
+        .entry("thread-workspace-root-hints".to_string())
+        .or_insert_with(|| Value::Object(Default::default()));
+    let Some(hints) = hints_value.as_object_mut() else {
+        return Ok(0);
+    };
+
+    let mut changed = 0usize;
+    for meta in metas {
+        if meta.cwd.trim().is_empty() || !project_mapper.is_known_project_root(&meta.cwd) {
+            continue;
+        }
+        if hints.get(&meta.id).and_then(Value::as_str) == Some(meta.cwd.as_str()) {
+            continue;
+        }
+        hints.insert(meta.id.clone(), Value::String(meta.cwd.clone()));
+        changed += 1;
+    }
+    if changed == 0 {
+        return Ok(0);
+    }
+
+    backup_global_state(codex, &global_state_path)?;
+    let tmp_path = global_state_path.with_extension(format!("json.tmp-{}", now_ms()));
+    fs::write(&tmp_path, serde_json::to_string_pretty(&value)? + "\n")?;
+    fs::rename(tmp_path, global_state_path)?;
+    Ok(changed)
+}
+
+fn backup_global_state(codex: &Path, global_state_path: &Path) -> Result<()> {
+    let backup_dir = codex.join("backups_state");
+    fs::create_dir_all(&backup_dir)?;
+    let backup_path = backup_dir.join(format!(
+        ".codex-global-state.json.codex-tools-thread-hints-{}",
+        now_ms()
+    ));
+    fs::copy(global_state_path, backup_path)?;
+    Ok(())
+}
+
+fn read_thread_meta(
+    codex: &Path,
+    path: &Path,
+    provider: &str,
+    project_mapper: &ProjectNameMapper,
+) -> Result<Option<ThreadMeta>> {
     let content = fs::read_to_string(path)?;
     let mut session_meta: Option<Value> = None;
     let mut first_user_message = String::new();
@@ -1621,6 +1698,9 @@ fn read_thread_meta(codex: &Path, path: &Path, provider: &str) -> Result<Option<
     let title = value_string(payload.get("title").unwrap_or(&Value::Null))
         .or_else(|| non_empty_text(&first_user_message))
         .unwrap_or_else(|| "Untitled".to_string());
+    let raw_cwd = value_string(payload.get("cwd").unwrap_or(&Value::Null)).unwrap_or_default();
+    let cwd = project_mapper.map_cwd(&raw_cwd);
+    let cwd_was_remapped = normalize_cwd(raw_cwd) != cwd;
     Ok(Some(ThreadMeta {
         id,
         rollout_path: path.to_path_buf(),
@@ -1635,9 +1715,7 @@ fn read_thread_meta(codex: &Path, path: &Path, provider: &str) -> Result<Option<
         source: value_string(payload.get("source").unwrap_or(&Value::Null))
             .unwrap_or_else(|| "codex".to_string()),
         model_provider: provider.to_string(),
-        cwd: normalize_cwd(
-            value_string(payload.get("cwd").unwrap_or(&Value::Null)).unwrap_or_default(),
-        ),
+        cwd,
         title,
         sandbox_policy: payload
             .get("sandbox_policy")
@@ -1664,6 +1742,7 @@ fn read_thread_meta(codex: &Path, path: &Path, provider: &str) -> Result<Option<
         .or_else(|| value_string(payload.get("reasoning_effort").unwrap_or(&Value::Null))),
         thread_source: value_string(payload.get("thread_source").unwrap_or(&Value::Null)),
         preview: truncate_text(preview, 4096),
+        cwd_was_remapped,
     }))
 }
 
@@ -1709,6 +1788,104 @@ fn truncate_text(value: String, max_chars: usize) -> String {
 
 fn normalize_cwd(value: String) -> String {
     value.strip_prefix(r"\\?\").unwrap_or(&value).to_string()
+}
+
+#[derive(Debug, Clone, Default)]
+struct ProjectNameMapper {
+    unique_roots_by_project_name: HashMap<String, String>,
+    known_project_roots: HashSet<String>,
+}
+
+impl ProjectNameMapper {
+    fn from_codex(codex: &Path) -> Self {
+        let global_state_path = codex.join(".codex-global-state.json");
+        let Ok(content) = fs::read_to_string(global_state_path) else {
+            return Self::default();
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&content) else {
+            return Self::default();
+        };
+
+        let mut roots = Vec::new();
+        for key in [
+            "project-order",
+            "electron-saved-workspace-roots",
+            "active-workspace-roots",
+        ] {
+            let Some(values) = value.get(key).and_then(Value::as_array) else {
+                continue;
+            };
+            roots.extend(
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter(|root| !root.trim().is_empty())
+                    .map(ToOwned::to_owned),
+            );
+        }
+
+        let mut roots_by_name = HashMap::<String, HashSet<String>>::new();
+        let mut known_project_roots = HashSet::new();
+        for root in roots {
+            let Some(project_name) = project_name_from_path(&root) else {
+                continue;
+            };
+            known_project_roots.insert(root.clone());
+            roots_by_name
+                .entry(project_name_key(&project_name))
+                .or_default()
+                .insert(root);
+        }
+
+        let unique_roots_by_project_name = roots_by_name
+            .into_iter()
+            .filter_map(|(project_name, roots)| {
+                if roots.len() == 1 {
+                    roots.into_iter().next().map(|root| (project_name, root))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        Self {
+            unique_roots_by_project_name,
+            known_project_roots,
+        }
+    }
+
+    fn map_cwd(&self, raw_cwd: &str) -> String {
+        let normalized = normalize_cwd(raw_cwd.to_string());
+        let Some(project_name) = project_name_from_path(&normalized) else {
+            return normalized;
+        };
+        self.unique_roots_by_project_name
+            .get(&project_name_key(&project_name))
+            .cloned()
+            .unwrap_or(normalized)
+    }
+
+    fn is_known_project_root(&self, cwd: &str) -> bool {
+        self.known_project_roots.contains(cwd)
+    }
+}
+
+fn project_name_key(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+fn project_name_from_path(value: &str) -> Option<String> {
+    let normalized = value.replace('\\', "/");
+    let trimmed = normalized.trim().trim_end_matches('/');
+    let name = trimmed
+        .rsplit('/')
+        .find(|part| !part.trim().is_empty())
+        .unwrap_or(trimmed)
+        .trim();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
 }
 
 fn parse_time_ms(value: &str) -> Option<i64> {
@@ -1759,9 +1936,8 @@ fn rebuild_index(codex: &Path, provider: &str) -> Result<usize> {
         let git_branch: Option<String> = row.get(6)?;
         let project_root = cwd.clone().unwrap_or_default().to_lowercase();
         let project_name = cwd
-            .as_ref()
-            .and_then(|path| Path::new(path).file_name())
-            .and_then(|name| name.to_str())
+            .as_deref()
+            .and_then(project_name_from_path)
             .unwrap_or_default()
             .to_string();
         Ok(serde_json::json!({

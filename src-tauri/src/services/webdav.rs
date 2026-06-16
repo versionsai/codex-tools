@@ -247,13 +247,15 @@ pub async fn pull_threads_impl() -> Result<String> {
     let repair = repair_thread_visibility_index_for_current_provider()?;
 
     Ok(format!(
-        "拉取完成：下载 {} 个，跳过 {} 个，按线程 ID 合并 {} 个，远端线程 {} 条，补齐线程行 {} 条，更新线程行 {} 条，索引 {} 条",
+        "拉取完成：下载 {} 个，跳过 {} 个，按线程 ID 合并 {} 个，远端线程 {} 条，补齐线程行 {} 条，更新线程行 {} 条，项目名映射 {} 条，项目归属 {} 条，索引 {} 条",
         downloaded,
         skipped,
         merged_by_identity,
         manifest.threads.len(),
         repair.inserted_rows,
         repair.updated_rows,
+        repair.remapped_cwd_rows,
+        repair.workspace_hint_rows,
         repair.index_entries
     ))
 }
