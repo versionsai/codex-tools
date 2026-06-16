@@ -374,8 +374,6 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Regular);
             #[cfg(target_os = "macos")]
-            macos_status_item::install();
-            #[cfg(target_os = "macos")]
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
@@ -417,6 +415,10 @@ pub fn run() {
         .expect("error while building Codex Tools");
 
     app.run(|app, event| match event {
+        #[cfg(target_os = "macos")]
+        RunEvent::Ready => {
+            macos_status_item::install();
+        }
         RunEvent::WindowEvent {
             label,
             event: WindowEvent::CloseRequested { api, .. },
