@@ -3,7 +3,7 @@ use super::paths::{
 };
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Local};
-use rusqlite::Connection;
+use rusqlite::{params_from_iter, types::Value as SqlValue, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
@@ -12,7 +12,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     thread,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use toml_edit::{value, DocumentMut, Item, Value as TomlValue};
 use walkdir::WalkDir;
@@ -89,6 +89,14 @@ pub struct UsageSummary {
     pub total_cost_usd: f64,
     pub files_scanned: usize,
     pub usage_events: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ThreadRepairSummary {
+    pub rollout_files: usize,
+    pub inserted_rows: usize,
+    pub updated_rows: usize,
+    pub index_entries: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -562,7 +570,7 @@ pub fn restart_codex_app_impl() -> Result<String> {
         let _ = Command::new("osascript")
             .args(["-e", "tell application \"Codex\" to quit"])
             .status();
-        thread::sleep(Duration::from_millis(900));
+        wait_for_process_exit("Codex", 12, 500);
         let open_status = Command::new("open")
             .args(["-a", &app_path.display().to_string()])
             .status()?;
@@ -574,14 +582,14 @@ pub fn restart_codex_app_impl() -> Result<String> {
 
     #[cfg(target_os = "windows")]
     {
-        let exe_path = find_codex_exe_path_windows()
-            .ok_or_else(|| anyhow!("未找到 Codex.exe，请确认已安装桌面版 Codex"))?;
+        let launch_target = find_codex_launch_target_windows()
+            .ok_or_else(|| anyhow!("未找到 Codex.exe 或 Codex.lnk，请确认已安装桌面版 Codex"))?;
         let _ = Command::new("taskkill")
             .args(["/IM", "Codex.exe", "/T", "/F"])
             .status();
-        thread::sleep(Duration::from_millis(900));
+        wait_for_process_exit("Codex.exe", 12, 500);
         let open_status = Command::new("cmd")
-            .args(["/C", "start", "", &exe_path.display().to_string()])
+            .args(["/C", "start", "", &launch_target.display().to_string()])
             .status()?;
         if !open_status.success() {
             return Err(anyhow!("重新打开 Codex 失败"));
@@ -600,6 +608,60 @@ fn find_codex_app_path_macos() -> Option<PathBuf> {
         dirs::home_dir()?.join("Applications").join("Codex.app"),
     ];
     candidates.into_iter().find(|path| path.exists())
+}
+
+fn wait_for_process_exit(process_name: &str, max_attempts: usize, sleep_ms: u64) {
+    for _ in 0..max_attempts {
+        if !is_process_running(process_name) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(sleep_ms));
+    }
+}
+
+fn is_process_running(process_name: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("osascript")
+            .args([
+                "-e",
+                &format!(
+                    "tell application \"System Events\" to count (every process whose name is \"{}\")",
+                    process_name
+                ),
+            ])
+            .output()
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim() != "0")
+            .or_else(|_| {
+                Command::new("pgrep")
+                    .args(["-x", process_name])
+                    .status()
+                    .map(|status| status.success())
+            })
+            .unwrap_or(false)
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("tasklist")
+            .args(["/FI", &format!("IMAGENAME eq {}", process_name)])
+            .output()
+            .map(|output| {
+                let body = String::from_utf8_lossy(&output.stdout);
+                body.lines().any(|line| line.starts_with(process_name))
+            })
+            .unwrap_or(false)
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        false
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn find_codex_launch_target_windows() -> Option<PathBuf> {
+    find_codex_exe_path_windows().or_else(find_codex_shortcut_path_windows)
 }
 
 #[cfg(target_os = "windows")]
@@ -631,6 +693,46 @@ fn find_codex_exe_path_windows() -> Option<PathBuf> {
             PathBuf::from(program_files_x86)
                 .join("Codex")
                 .join("Codex.exe"),
+        );
+    }
+    candidates.into_iter().find(|path| path.exists())
+}
+
+#[cfg(target_os = "windows")]
+fn find_codex_shortcut_path_windows() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(user_profile) = std::env::var_os("USERPROFILE") {
+        candidates.push(
+            PathBuf::from(&user_profile)
+                .join("Desktop")
+                .join("Codex.lnk"),
+        );
+    }
+    if let Some(public_profile) = std::env::var_os("PUBLIC") {
+        candidates.push(
+            PathBuf::from(public_profile)
+                .join("Desktop")
+                .join("Codex.lnk"),
+        );
+    }
+    if let Some(app_data) = std::env::var_os("APPDATA") {
+        candidates.push(
+            PathBuf::from(app_data)
+                .join("Microsoft")
+                .join("Windows")
+                .join("Start Menu")
+                .join("Programs")
+                .join("Codex.lnk"),
+        );
+    }
+    if let Some(program_data) = std::env::var_os("PROGRAMDATA") {
+        candidates.push(
+            PathBuf::from(program_data)
+                .join("Microsoft")
+                .join("Windows")
+                .join("Start Menu")
+                .join("Programs")
+                .join("Codex.lnk"),
         );
     }
     candidates.into_iter().find(|path| path.exists())
@@ -716,15 +818,31 @@ pub fn unify_thread_provider_impl() -> Result<String> {
             rollout_changed += 1;
         }
     }
-    let thread_rows_updated = update_thread_rows(&dir.join("state_5.sqlite"), &provider)?;
-    let index_entries = rebuild_index(&dir, &provider)?;
+    let repair = repair_thread_visibility_index_for_dir(&dir, &provider)?;
     Ok(format!(
-        "合并完成：扫描 {} 个，修改 {} 个，更新线程行 {} 条，索引 {} 条",
+        "合并完成：扫描 {} 个，修改 {} 个，补齐线程行 {} 条，更新线程行 {} 条，索引 {} 条",
         rollout_files.len(),
         rollout_changed,
-        thread_rows_updated,
-        index_entries
+        repair.inserted_rows,
+        repair.updated_rows,
+        repair.index_entries
     ))
+}
+
+pub fn repair_thread_visibility_index_impl() -> Result<String> {
+    let dir = codex_dir()?;
+    let provider = current_provider()?;
+    let repair = repair_thread_visibility_index_for_dir(&dir, &provider)?;
+    Ok(format!(
+        "修复完成：扫描 {} 个，补齐线程行 {} 条，更新线程行 {} 条，索引 {} 条",
+        repair.rollout_files, repair.inserted_rows, repair.updated_rows, repair.index_entries
+    ))
+}
+
+pub fn repair_thread_visibility_index_for_current_provider() -> Result<ThreadRepairSummary> {
+    let dir = codex_dir()?;
+    let provider = current_provider()?;
+    repair_thread_visibility_index_for_dir(&dir, &provider)
 }
 
 fn read_config_document() -> Result<DocumentMut> {
@@ -1174,16 +1292,450 @@ fn replace_provider_in_jsonl(content: &str, provider: &str) -> (String, bool) {
     (lines.join("\n") + "\n", changed)
 }
 
-fn update_thread_rows(sqlite_path: &Path, provider: &str) -> Result<usize> {
+#[derive(Debug, Clone)]
+struct ThreadMeta {
+    id: String,
+    rollout_path: PathBuf,
+    archived: bool,
+    created_at: i64,
+    updated_at: i64,
+    created_at_ms: i64,
+    updated_at_ms: i64,
+    source: String,
+    model_provider: String,
+    cwd: String,
+    title: String,
+    sandbox_policy: String,
+    approval_mode: String,
+    cli_version: String,
+    first_user_message: String,
+    git_sha: Option<String>,
+    git_branch: Option<String>,
+    git_origin_url: Option<String>,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
+    thread_source: Option<String>,
+    preview: String,
+}
+
+#[derive(Debug, Clone)]
+struct ThreadColumn {
+    name: String,
+    kind: String,
+    not_null: bool,
+    default_value: Option<String>,
+    primary_key: bool,
+}
+
+fn repair_thread_visibility_index_for_dir(
+    codex: &Path,
+    provider: &str,
+) -> Result<ThreadRepairSummary> {
+    let rollout_files = sync_rollout_paths(codex);
+    let mut metas = Vec::new();
+    for path in &rollout_files {
+        if let Some(meta) = read_thread_meta(codex, path, provider)? {
+            metas.push(meta);
+        }
+    }
+    let (inserted_rows, updated_rows) = upsert_thread_rows(codex, &metas)?;
+    let index_entries = rebuild_index(codex, provider)?;
+    Ok(ThreadRepairSummary {
+        rollout_files: rollout_files.len(),
+        inserted_rows,
+        updated_rows,
+        index_entries,
+    })
+}
+
+fn upsert_thread_rows(codex: &Path, metas: &[ThreadMeta]) -> Result<(usize, usize)> {
+    let sqlite_path = codex.join("state_5.sqlite");
     if !sqlite_path.exists() {
-        return Ok(0);
+        return Ok((0, 0));
     }
     let conn = Connection::open(sqlite_path)?;
-    let changed = conn.execute(
-        "UPDATE threads SET model_provider = ?1 WHERE model_provider != ?1",
-        [provider],
+    if !table_exists(&conn, "threads")? {
+        return Ok((0, 0));
+    }
+    let columns = thread_columns(&conn)?;
+    let column_names = columns
+        .iter()
+        .map(|column| column.name.as_str())
+        .collect::<HashSet<_>>();
+    if !column_names.contains("id") {
+        return Ok((0, 0));
+    }
+
+    let existing_ids = existing_thread_ids(&conn)?;
+    let mut inserted = 0usize;
+    let mut updated = 0usize;
+    for meta in metas {
+        if existing_ids.contains(&meta.id) {
+            updated += update_existing_thread_row(&conn, meta, &column_names)?;
+        } else if insert_thread_row(&conn, meta, &columns)? {
+            inserted += 1;
+        }
+    }
+    Ok((inserted, updated))
+}
+
+fn table_exists(conn: &Connection, table: &str) -> Result<bool> {
+    let exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        [table],
+        |row| row.get(0),
     )?;
-    Ok(changed)
+    Ok(exists > 0)
+}
+
+fn thread_columns(conn: &Connection) -> Result<Vec<ThreadColumn>> {
+    let mut statement = conn.prepare("PRAGMA table_info(threads)")?;
+    let columns = statement
+        .query_map([], |row| {
+            Ok(ThreadColumn {
+                name: row.get(1)?,
+                kind: row.get(2)?,
+                not_null: row.get::<_, i64>(3)? != 0,
+                default_value: row.get(4)?,
+                primary_key: row.get::<_, i64>(5)? != 0,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(columns)
+}
+
+fn existing_thread_ids(conn: &Connection) -> Result<HashSet<String>> {
+    let mut statement = conn.prepare("SELECT id FROM threads")?;
+    let ids = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<HashSet<_>>>()?;
+    Ok(ids)
+}
+
+fn update_existing_thread_row(
+    conn: &Connection,
+    meta: &ThreadMeta,
+    column_names: &HashSet<&str>,
+) -> Result<usize> {
+    let mut assignments = Vec::new();
+    let mut values = Vec::new();
+    let updates = [
+        (
+            "rollout_path",
+            SqlValue::Text(meta.rollout_path.display().to_string()),
+        ),
+        (
+            "model_provider",
+            SqlValue::Text(meta.model_provider.clone()),
+        ),
+        (
+            "archived",
+            SqlValue::Integer(if meta.archived { 1 } else { 0 }),
+        ),
+    ];
+    for (name, value) in updates {
+        if column_names.contains(name) {
+            assignments.push(format!("{} = ?", quote_identifier(name)));
+            values.push(value);
+        }
+    }
+    for (name, value) in optional_update_values(meta) {
+        if column_names.contains(name) {
+            assignments.push(format!(
+                "{} = COALESCE(NULLIF({}, ''), ?)",
+                quote_identifier(name),
+                quote_identifier(name)
+            ));
+            values.push(value);
+        }
+    }
+    if assignments.is_empty() {
+        return Ok(0);
+    }
+    values.push(SqlValue::Text(meta.id.clone()));
+    let sql = format!("UPDATE threads SET {} WHERE id = ?", assignments.join(", "));
+    Ok(conn.execute(&sql, params_from_iter(values))?)
+}
+
+fn optional_update_values(meta: &ThreadMeta) -> Vec<(&'static str, SqlValue)> {
+    vec![
+        ("cwd", SqlValue::Text(meta.cwd.clone())),
+        ("source", SqlValue::Text(meta.source.clone())),
+        ("thread_source", nullable_text(meta.thread_source.clone())),
+        ("git_sha", nullable_text(meta.git_sha.clone())),
+        ("git_branch", nullable_text(meta.git_branch.clone())),
+        ("git_origin_url", nullable_text(meta.git_origin_url.clone())),
+        ("model", nullable_text(meta.model.clone())),
+        (
+            "reasoning_effort",
+            nullable_text(meta.reasoning_effort.clone()),
+        ),
+    ]
+}
+
+fn insert_thread_row(
+    conn: &Connection,
+    meta: &ThreadMeta,
+    columns: &[ThreadColumn],
+) -> Result<bool> {
+    let mut names = Vec::new();
+    let mut placeholders = Vec::new();
+    let mut values = Vec::new();
+    for column in columns {
+        let Some(value) = thread_value_for_column(meta, column) else {
+            continue;
+        };
+        names.push(quote_identifier(&column.name));
+        placeholders.push("?".to_string());
+        values.push(value);
+    }
+    if names.is_empty() {
+        return Ok(false);
+    }
+    let sql = format!(
+        "INSERT OR IGNORE INTO threads ({}) VALUES ({})",
+        names.join(", "),
+        placeholders.join(", ")
+    );
+    Ok(conn.execute(&sql, params_from_iter(values))? > 0)
+}
+
+fn thread_value_for_column(meta: &ThreadMeta, column: &ThreadColumn) -> Option<SqlValue> {
+    let value = match column.name.as_str() {
+        "id" => SqlValue::Text(meta.id.clone()),
+        "rollout_path" => SqlValue::Text(meta.rollout_path.display().to_string()),
+        "created_at" => SqlValue::Integer(meta.created_at),
+        "updated_at" => SqlValue::Integer(meta.updated_at),
+        "source" => SqlValue::Text(meta.source.clone()),
+        "model_provider" => SqlValue::Text(meta.model_provider.clone()),
+        "cwd" => SqlValue::Text(meta.cwd.clone()),
+        "title" => SqlValue::Text(meta.title.clone()),
+        "sandbox_policy" => SqlValue::Text(meta.sandbox_policy.clone()),
+        "approval_mode" => SqlValue::Text(meta.approval_mode.clone()),
+        "tokens_used" => SqlValue::Integer(0),
+        "has_user_event" => SqlValue::Integer(if meta.first_user_message.is_empty() {
+            0
+        } else {
+            1
+        }),
+        "archived" => SqlValue::Integer(if meta.archived { 1 } else { 0 }),
+        "archived_at" => SqlValue::Null,
+        "git_sha" => nullable_text(meta.git_sha.clone()),
+        "git_branch" => nullable_text(meta.git_branch.clone()),
+        "git_origin_url" => nullable_text(meta.git_origin_url.clone()),
+        "cli_version" => SqlValue::Text(meta.cli_version.clone()),
+        "first_user_message" => SqlValue::Text(meta.first_user_message.clone()),
+        "agent_nickname" => SqlValue::Null,
+        "agent_role" => SqlValue::Null,
+        "memory_mode" => SqlValue::Text("enabled".to_string()),
+        "model" => nullable_text(meta.model.clone()),
+        "reasoning_effort" => nullable_text(meta.reasoning_effort.clone()),
+        "agent_path" => SqlValue::Null,
+        "created_at_ms" => SqlValue::Integer(meta.created_at_ms),
+        "updated_at_ms" => SqlValue::Integer(meta.updated_at_ms),
+        "thread_source" => nullable_text(meta.thread_source.clone()),
+        "preview" => SqlValue::Text(meta.preview.clone()),
+        _ => {
+            if !column.not_null || column.default_value.is_some() || column.primary_key {
+                return None;
+            }
+            fallback_sql_value_for_column(&column.kind)
+        }
+    };
+    Some(value)
+}
+
+fn fallback_sql_value_for_column(kind: &str) -> SqlValue {
+    let upper = kind.to_ascii_uppercase();
+    if upper.contains("INT") {
+        SqlValue::Integer(0)
+    } else if upper.contains("REAL") || upper.contains("FLOA") || upper.contains("DOUB") {
+        SqlValue::Real(0.0)
+    } else {
+        SqlValue::Text(String::new())
+    }
+}
+
+fn nullable_text(value: Option<String>) -> SqlValue {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .map(SqlValue::Text)
+        .unwrap_or(SqlValue::Null)
+}
+
+fn read_thread_meta(codex: &Path, path: &Path, provider: &str) -> Result<Option<ThreadMeta>> {
+    let content = fs::read_to_string(path)?;
+    let mut session_meta: Option<Value> = None;
+    let mut first_user_message = String::new();
+    let mut preview = String::new();
+    let mut last_timestamp: Option<String> = None;
+    for line in content.lines().filter(|line| !line.trim().is_empty()) {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if let Some(timestamp) = value.get("timestamp").and_then(Value::as_str) {
+            last_timestamp = Some(timestamp.to_string());
+        }
+        if value.get("type").and_then(Value::as_str) == Some("session_meta") {
+            session_meta = Some(value);
+            continue;
+        }
+        if first_user_message.is_empty() {
+            if let Some(message) = user_message_from_event(&value) {
+                first_user_message = message;
+            }
+        }
+        if preview.is_empty() {
+            preview = first_user_message.clone();
+        }
+    }
+    let Some(meta) = session_meta else {
+        return Ok(None);
+    };
+    let payload = meta.get("payload").unwrap_or(&Value::Null);
+    let id = payload
+        .get("id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| thread_id_from_rollout_path(path))
+        .unwrap_or_default();
+    if id.is_empty() {
+        return Ok(None);
+    }
+    let timestamp = payload
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .or_else(|| meta.get("timestamp").and_then(Value::as_str));
+    let created_at_ms = timestamp.and_then(parse_time_ms).unwrap_or_else(now_ms);
+    let updated_at_ms = last_timestamp
+        .as_deref()
+        .and_then(parse_time_ms)
+        .unwrap_or(created_at_ms);
+    if first_user_message.is_empty() {
+        first_user_message =
+            value_string(payload.get("title").unwrap_or(&Value::Null)).unwrap_or_default();
+    }
+    if preview.is_empty() {
+        preview = first_user_message.clone();
+    }
+    let title = value_string(payload.get("title").unwrap_or(&Value::Null))
+        .or_else(|| non_empty_text(&first_user_message))
+        .unwrap_or_else(|| "Untitled".to_string());
+    Ok(Some(ThreadMeta {
+        id,
+        rollout_path: path.to_path_buf(),
+        archived: path
+            .strip_prefix(codex)
+            .ok()
+            .is_some_and(|relative| relative.starts_with("archived_sessions")),
+        created_at: created_at_ms / 1000,
+        updated_at: updated_at_ms / 1000,
+        created_at_ms,
+        updated_at_ms,
+        source: value_string(payload.get("source").unwrap_or(&Value::Null))
+            .unwrap_or_else(|| "codex".to_string()),
+        model_provider: provider.to_string(),
+        cwd: normalize_cwd(
+            value_string(payload.get("cwd").unwrap_or(&Value::Null)).unwrap_or_default(),
+        ),
+        title,
+        sandbox_policy: payload
+            .get("sandbox_policy")
+            .cloned()
+            .or_else(|| payload.get("sandbox").cloned())
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "{}".to_string()),
+        approval_mode: value_string(payload.get("approval_mode").unwrap_or(&Value::Null))
+            .unwrap_or_else(|| "on-request".to_string()),
+        cli_version: value_string(payload.get("cli_version").unwrap_or(&Value::Null))
+            .unwrap_or_default(),
+        first_user_message: truncate_text(first_user_message, 4096),
+        git_sha: payload.pointer("/git/commit_hash").and_then(value_string),
+        git_branch: payload.pointer("/git/branch").and_then(value_string),
+        git_origin_url: payload
+            .pointer("/git/repository_url")
+            .and_then(value_string),
+        model: value_string(payload.get("model").unwrap_or(&Value::Null)),
+        reasoning_effort: value_string(
+            payload
+                .get("model_reasoning_effort")
+                .unwrap_or(&Value::Null),
+        )
+        .or_else(|| value_string(payload.get("reasoning_effort").unwrap_or(&Value::Null))),
+        thread_source: value_string(payload.get("thread_source").unwrap_or(&Value::Null)),
+        preview: truncate_text(preview, 4096),
+    }))
+}
+
+fn user_message_from_event(value: &Value) -> Option<String> {
+    if value.pointer("/payload/type").and_then(Value::as_str) != Some("message") {
+        return None;
+    }
+    if value.pointer("/payload/role").and_then(Value::as_str) != Some("user") {
+        return None;
+    }
+    let content = value.pointer("/payload/content")?;
+    if let Some(text) = content.as_str() {
+        return non_empty_text(text);
+    }
+    let parts = content.as_array()?;
+    let text = parts
+        .iter()
+        .filter_map(|part| {
+            part.get("text")
+                .or_else(|| part.get("content"))
+                .and_then(Value::as_str)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    non_empty_text(&text)
+}
+
+fn non_empty_text(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn truncate_text(value: String, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value;
+    }
+    value.chars().take(max_chars).collect()
+}
+
+fn normalize_cwd(value: String) -> String {
+    value.strip_prefix(r"\\?\").unwrap_or(&value).to_string()
+}
+
+fn parse_time_ms(value: &str) -> Option<i64> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|time| time.timestamp_millis())
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn thread_id_from_rollout_path(path: &Path) -> Option<String> {
+    let filename = path.file_name()?.to_str()?;
+    let stem = filename.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
+    if stem.len() >= 36 {
+        Some(stem[stem.len() - 36..].to_string())
+    } else {
+        Some(stem.to_string())
+    }
+}
+
+fn quote_identifier(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
 }
 
 fn rebuild_index(codex: &Path, provider: &str) -> Result<usize> {

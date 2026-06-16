@@ -564,6 +564,22 @@ function App() {
     });
   }
 
+  async function pullThreads() {
+    await runScoped("sync", "拉取远端线程", async () => {
+      const result = await invoke<string>("pull_threads");
+      const restartMessage = await invoke<string>("restart_codex_app");
+      return `${result}，${restartMessage}`;
+    });
+  }
+
+  async function repairThreadVisibilityIndex() {
+    await runScoped("sync", "修复线程可见性", async () => {
+      const result = await invoke<string>("repair_thread_visibility_index");
+      const restartMessage = await invoke<string>("restart_codex_app");
+      return `${result}，${restartMessage}`;
+    });
+  }
+
   async function switchProvider(providerId: string) {
     await runScoped("provider", `切换 Provider 到 ${providerId}`, async () => {
       await invoke("switch_provider", { providerId });
@@ -674,9 +690,10 @@ function App() {
           </div>
         </div>
         <div className="toolbar">
-          <button className="tip-button" data-tip="拉取远端线程" aria-label="拉取远端线程" title="拉取远端线程" disabled={!!syncBusy} onClick={() => void runScoped("sync", "拉取远端线程", () => invoke("pull_threads"))}><CloudDownload size={18} /></button>
+          <button className="tip-button" data-tip="拉取远端线程" aria-label="拉取远端线程" title="拉取远端线程" disabled={!!syncBusy} onClick={() => void pullThreads()}><CloudDownload size={18} /></button>
           <button className="tip-button" data-tip="推送本地线程" aria-label="推送本地线程" title="推送本地线程" disabled={!!syncBusy} onClick={() => void runScoped("sync", "推送本地线程", () => invoke("push_threads"))}><CloudUpload size={18} /></button>
           <button className="tip-button" data-tip="合并 Provider 线程" aria-label="合并 Provider 线程" title="合并 Provider 线程" disabled={!!syncBusy} onClick={() => void runScoped("sync", "合并 Provider 线程", () => invoke("unify_thread_provider"))}><Shuffle size={18} /></button>
+          <button className="tip-button" data-tip="修复线程可见性" aria-label="修复线程可见性" title="修复线程可见性" disabled={!!syncBusy} onClick={() => void repairThreadVisibilityIndex()}><RefreshCw size={18} /></button>
           {workspaceTools.filter((tool) => tool.capabilities.hasDetailPage).map((tool) => {
             const Icon = tool.icon;
             return (

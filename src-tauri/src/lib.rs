@@ -8,8 +8,9 @@ use services::{
     },
     codex::{
         delete_provider_impl, fetch_provider_models_impl, get_provider_impl, get_summary_impl,
-        get_usage_summary_impl, list_providers_impl, restart_codex_app_impl, save_provider_impl,
-        switch_provider_impl, unify_thread_provider_impl,
+        get_usage_summary_impl, list_providers_impl, repair_thread_visibility_index_impl,
+        restart_codex_app_impl, save_provider_impl, switch_provider_impl,
+        unify_thread_provider_impl,
     },
     webdav::{
         load_webdav_config_impl, pull_threads_impl, push_threads_impl, save_webdav_config_impl,
@@ -174,6 +175,14 @@ async fn unify_thread_provider() -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn repair_thread_visibility_index() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(repair_thread_visibility_index_impl)
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 async fn load_webdav_config() -> Result<WebDavConfig, String> {
     tauri::async_runtime::spawn_blocking(load_webdav_config_impl)
         .await
@@ -325,6 +334,7 @@ pub fn run() {
             restart_codex_app,
             fetch_provider_models,
             unify_thread_provider,
+            repair_thread_visibility_index,
             load_webdav_config,
             save_webdav_config,
             pull_threads,

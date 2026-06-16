@@ -40,14 +40,14 @@ xattr -dr com.apple.quarantine "/Applications/Codex Tools.app"
 
 macOS 下 Provider 切换、Codex 配置写入、线程 Provider 合并、状态栏入口、WebDAV 推拉，以及“切换 Provider 后自动重启 Codex”都已经做过本机验证。
 
-Windows 现在主要通过 GitHub Actions 产出 `.exe` / `.msi` 安装包，并按常见安装目录实现了 Codex 自动重启逻辑；但还没有在真实 Windows 机器上完整验证 Provider 切换、线程归并、托盘行为和自动重启流程，所以 Windows 制品仍建议先按实验性版本看待。
+Windows 现在主要通过 GitHub Actions 产出 `.exe` / `.msi` 安装包，并按常见安装目录实现了 Codex 自动重启逻辑；如果找不到 `Codex.exe`，会继续尝试常见的 `Codex.lnk` 启动入口。真实 Windows 机器上的 Provider 切换、线程归并、托盘行为和自动重启流程仍建议先按实验性版本看待。
 
 ## 当前内置模块
 
 - Provider 管理：保存多个 Codex Provider，切换后自动写回 Codex 配置、统一本地线程里的 Provider，并自动重启 Codex 桌面应用。
 - 用量统计：离线统计本地 `sessions` JSONL 中的 token，用日期和 Provider 两个维度展示总量与预估 Cost。
 - 微信连接：Codex Tools 内置微信连接引擎，负责项目选择、扫码登录、服务启动和通信状态展示。
-- WebDAV 同步：推送和拉取 Codex 线程文件，支持 `sessions`、`archived_sessions` 与 `session_index.jsonl`。
+- WebDAV 同步：推送和拉取 Codex 线程文件，支持 `sessions`、`archived_sessions` 与 `session_index.jsonl`；拉取后会补齐本机线程可见性索引，避免线程文件已恢复但 Codex UI 仍不展示。
 - 状态栏入口：macOS 下常驻菜单栏，可直接切换 Provider、打开主窗口、刷新列表。
 
 现在的首页会优先展示这些工具模块，Provider 列表作为工作台的一部分保留在同一入口里。这一层结构就是后续继续接新工具的基础。
@@ -148,6 +148,8 @@ WebDAV 线程同步只处理和线程相关的文件：
 *.wal
 *.shm
 ```
+
+拉取远端线程后，工具会根据本机实际 `threads` 表结构，从 rollout 的 `session_meta` 动态补齐缺失线程行，并重建 `session_index.jsonl`。这个过程不上传或覆盖 `state_5.sqlite`，只修复当前机器的线程可见性。
 
 ## Codex 目录
 

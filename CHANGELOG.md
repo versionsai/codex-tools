@@ -4,6 +4,14 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)。已发布版本使用对应的 Git tag 标题，例如 `v0.1.6`；尚未发布的变更先写在 `未发布` 下，发版时再移动到新的 tag 区块。
 
+## 未发布
+
+### 变更
+
+- WebDAV 拉取线程后会基于本机 `threads` 表结构动态补齐缺失线程行，并重建 `session_index.jsonl`，减少线程文件已同步但 Codex UI 不展示的问题。
+- 新增“修复线程可见性”命令和工具栏入口，可单独扫描本地 rollout 修复本机索引。
+- Windows 自动重启 Codex 时，如果常见安装目录找不到 `Codex.exe`，会继续尝试桌面和开始菜单中的 `Codex.lnk`。
+
 ## v0.1.10 - 2026-05-23
 
 ### 新增
