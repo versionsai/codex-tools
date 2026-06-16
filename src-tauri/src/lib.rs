@@ -17,12 +17,15 @@ use services::{
         WebDavConfig,
     },
 };
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+};
 use tauri::{
     image::Image,
     menu::{MenuBuilder, MenuEvent},
     tray::{TrayIcon, TrayIconBuilder},
-    AppHandle, Emitter, Manager, RunEvent, Runtime, WindowEvent,
+    AppHandle, Emitter, Manager, RunEvent, Runtime, WindowEvent, Wry,
 };
 
 const TRAY_ID: &str = "codex-tools-tray";
@@ -31,6 +34,11 @@ const TRAY_REFRESH: &str = "tray:refresh";
 const TRAY_QUIT: &str = "tray:quit";
 const TRAY_PROVIDER_PREFIX: &str = "tray:provider:";
 const FRONTEND_REFRESH_EVENT: &str = "codex-tools-refresh";
+
+#[derive(Default)]
+struct AppState {
+    tray: Mutex<Option<TrayIcon<Wry>>>,
+}
 
 #[tauri::command]
 async fn get_summary() -> Result<services::codex::Summary, String> {
@@ -298,6 +306,7 @@ fn setup_tray<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<TrayIcon<R>> {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .manage(AppState::default())
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -312,7 +321,8 @@ pub fn run() {
                 let _ = window.set_skip_taskbar(false);
                 let _ = window.set_focus();
             }
-            let _ = setup_tray(app)?;
+            let tray = setup_tray(app)?;
+            *app.state::<AppState>().tray.lock().unwrap() = Some(tray);
             APP_HANDLE.set(app.handle().clone()).ok();
             Ok(())
         })
